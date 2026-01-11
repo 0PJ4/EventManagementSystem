@@ -1,0 +1,138 @@
+Goal
+Build a small prototype of a multi‑tenant event booking system where organizations can manage events, attendees, and shared resources — with several constraints that require careful relational modeling and non‑trivial SQL queries.
+
+The domain is familiar (events, users, resources), but the rules introduce complexity that tests real database design skill.
+
+🧩 Core Use Case
+Multiple organizations use the platform. Each organization can:
+
+Create events
+
+Invite attendees
+
+Allocate shared resources (rooms, equipment, staff)
+
+Track attendance and resource usage
+
+But the twist is in the constraints.
+
+🧱 Functional Requirements (with built‑in complexity)
+1. Multi‑Tenant Structure
+Users belong to exactly one organization.
+
+Events and resources belong to organizations.
+
+Some resources are global and can be shared across organizations with special rules.
+
+Challenge: Designing a schema that supports both org‑scoped and global resources cleanly.
+
+2. Event Scheduling Rules
+Each event has:
+
+Start time, end time
+
+Capacity
+
+Optional parent event (for multi‑session events)
+
+Constraints:
+
+A user cannot be double‑booked across overlapping events.
+
+A resource cannot be allocated to overlapping events unless it is marked “shareable.”
+
+A parent event’s time must fully contain all its child sessions.
+
+Challenge: Requires interval overlap queries, recursive relationships, and constraint enforcement.
+
+3. Resource Allocation Rules
+Resources can be:
+
+Exclusive (e.g., a room)
+
+Shareable (e.g., projectors)
+
+Consumable (e.g., printed materials with quantity)
+
+Constraints:
+
+Exclusive resources cannot overlap in time.
+
+Shareable resources have a max concurrent usage count.
+
+Consumables must track quantity used per event.
+
+Challenge: Requires aggregation queries, conditional constraints, and careful modeling of resource types.
+
+4. Attendee Management
+Users can register for events within their organization.
+
+Some events allow external attendees (email‑only, no user account).
+
+Attendance must be tracked with check‑in timestamps.
+
+Challenge: Mixed user types, partial identities, and attendance analytics.
+
+5. Reporting Queries (Required Deliverables)
+The developer must implement endpoints that run complex SQL queries, such as:
+
+a. Find all users who are double‑booked
+Events overlap if:
+
+b. List all events that violate resource constraints
+Over‑allocated shareable resources
+
+Exclusive resources double‑booked
+
+Consumables exceeding available quantity
+
+c. Compute resource utilization per organization
+Total hours used
+
+Peak concurrent usage
+
+Underutilized resources
+
+d. Find parent events whose child sessions violate time boundaries
+e. List events with external attendees exceeding a threshold
+Challenge: These queries require joins, window functions, grouping, interval logic, and conditional aggregation.
+
+🏗️ Technical Requirements
+Backend (NestJS)
+Use NestJS with TypeORM or Prisma.
+
+Implement REST endpoints for:
+
+CRUD for events, resources, users
+
+Registration and attendance
+
+Resource allocation
+
+Reporting queries (must use raw SQL)
+
+Database (Postgres)
+Must include:
+
+Composite unique constraints
+
+Check constraints
+
+Foreign keys with cascading rules
+
+At least one recursive CTE
+
+At least one materialized view (for performance optimization)
+
+Frontend (React)
+A simple UI is enough:
+
+Organization switcher (mocked)
+
+Event list + creation form
+
+Resource list + allocation UI
+
+Attendee registration form
+
+Reporting dashboard (tables or charts)
