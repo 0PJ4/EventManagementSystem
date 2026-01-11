@@ -188,18 +188,24 @@ function OrganizationsList() {
                   <td>{new Date(org.createdAt).toLocaleString()}</td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      <button
-                        onClick={() => handleEdit(org)}
-                        className="btn btn-sm btn-secondary"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => deleteOrganization(org.id)}
-                        className="btn btn-sm btn-danger"
-                      >
-                        Delete
-                      </button>
+                      {/* Admins can edit all orgs, org admins can only edit their own org */}
+                      {(isAdmin || (!isAdmin && org.id === user?.organizationId)) && (
+                        <button
+                          onClick={() => handleEdit(org)}
+                          className="btn btn-sm btn-secondary"
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {/* Only admins can delete organizations */}
+                      {isAdmin && (
+                        <button
+                          onClick={() => deleteOrganization(org.id)}
+                          className="btn btn-sm btn-danger"
+                        >
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

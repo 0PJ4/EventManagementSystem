@@ -1,4 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import Register from './components/Register';
@@ -154,13 +155,29 @@ function AppContent() {
 function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout, isAdmin, isOrg } = useAuth();
   const location = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
   
   return (
-    <div className="app-container">
+    <div className={`app-container ${sidebarOpen ? '' : 'sidebar-collapsed'}`}>
+      {/* Sidebar Toggle Button */}
+      <button
+        className="sidebar-toggle"
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          {sidebarOpen ? (
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          ) : (
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          )}
+        </svg>
+      </button>
+      
       {/* Sidebar */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarOpen ? 'open' : 'collapsed'}`}>
         <div className="sidebar-header">
           <Link to="/dashboard" className="sidebar-logo">
             <svg viewBox="0 0 24 24" fill="currentColor">

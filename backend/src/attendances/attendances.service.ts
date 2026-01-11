@@ -117,10 +117,29 @@ export class AttendancesService {
   async checkIn(attendanceId: string): Promise<Attendance> {
     const attendance = await this.attendanceRepository.findOne({
       where: { id: attendanceId },
+      relations: ['event'],
     });
 
     if (!attendance) {
       throw new NotFoundException(`Attendance with ID ${attendanceId} not found`);
+    }
+
+    // Check if check-in is allowed (only during event time: between startTime and endTime)
+    const now = new Date();
+    const eventStartTime = new Date(attendance.event.startTime);
+    const eventEndTime = new Date(attendance.event.endTime);
+
+    if (now < eventStartTime) {
+      throw new BadRequestException('Check-in is only available once the event starts');
+    }
+
+    if (now > eventEndTime) {
+      throw new BadRequestException('Check-in is only available until the event ends');
+    }
+
+    // Check if already checked in
+    if (attendance.checkedInAt) {
+      throw new ConflictException('User has already checked in for this event');
     }
 
     attendance.checkedInAt = new Date();

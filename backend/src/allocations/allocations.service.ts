@@ -145,6 +145,83 @@ export class AllocationsService {
     });
   }
 
+  async update(id: string, updateAllocationDto: { quantity: number }): Promise<ResourceAllocation> {
+    const allocation = await this.allocationRepository.findOne({
+      where: { id },
+      relations: ['resource', 'event'],
+    });
+
+    if (!allocation) {
+      throw new NotFoundException(`Allocation with ID ${id} not found`);
+    }
+
+    // If quantity is being updated, validate the new quantity
+    if (updateAllocationDto.quantity !== undefined && updateAllocationDto.quantity !== allocation.quantity) {
+      const resource = await this.resourceRepository.findOne({
+        where: { id: allocation.resourceId },
+      });
+
+      if (!resource) {
+        throw new NotFoundException(`Resource with ID ${allocation.resourceId} not found`);
+      }
+
+      // Validate the new quantity (excluding current allocation)
+      if (resource.type === ResourceType.CONSUMABLE) {
+        if (updateAllocationDto.quantity > resource.availableQuantity) {
+          throw new BadRequestException(
+            `Requested quantity (${updateAllocationDto.quantity}) exceeds available quantity (${resource.availableQuantity})`
+          );
+        }
+        
+        // Check total allocated quantity for this event (excluding current allocation)
+        const totalAllocated = await this.allocationRepository
+          .createQueryBuilder('allocation')
+          .where('allocation.eventId = :eventId', { eventId: allocation.eventId })
+          .andWhere('allocation.resourceId = :resourceId', { resourceId: allocation.resourceId })
+          .andWhere('allocation.id != :allocationId', { allocationId: allocation.id })
+          .select('COALESCE(SUM(allocation.quantity), 0)', 'total')
+          .getRawOne();
+
+        const currentAllocated = parseInt(totalAllocated?.total || '0', 10);
+        if (currentAllocated + updateAllocationDto.quantity > resource.availableQuantity) {
+          throw new BadRequestException('Total allocated quantity exceeds available quantity');
+        }
+      } else if (resource.type === ResourceType.SHAREABLE) {
+        if (!resource.maxConcurrentUsage) {
+          throw new BadRequestException('Shareable resource must have maxConcurrentUsage defined');
+        }
+
+        // Check concurrent usage during event time (excluding current allocation)
+        const concurrentCount = await this.allocationRepository
+          .createQueryBuilder('allocation')
+          .innerJoin('allocation.event', 'event')
+          .where('allocation.resourceId = :resourceId', { resourceId: allocation.resourceId })
+          .andWhere('allocation.id != :allocationId', { allocationId: allocation.id })
+          .andWhere(
+            '(event.startTime < :endTime AND event.endTime > :startTime)',
+            {
+              startTime: allocation.event.startTime,
+              endTime: allocation.event.endTime,
+            }
+          )
+          .select('COALESCE(SUM(allocation.quantity), 0)', 'total')
+          .getRawOne();
+
+        const currentConcurrent = parseInt(concurrentCount?.total || '0', 10);
+        if (currentConcurrent + updateAllocationDto.quantity > resource.maxConcurrentUsage) {
+          throw new ConflictException(
+            `Concurrent usage (${currentConcurrent + updateAllocationDto.quantity}) exceeds max concurrent usage (${resource.maxConcurrentUsage})`
+          );
+        }
+      }
+      // For EXCLUSIVE resources, quantity change doesn't affect validation
+
+      allocation.quantity = updateAllocationDto.quantity;
+    }
+
+    return this.allocationRepository.save(allocation);
+  }
+
   async remove(id: string): Promise<void> {
     await this.allocationRepository.delete(id);
   }

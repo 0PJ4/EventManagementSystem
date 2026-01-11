@@ -12,6 +12,16 @@ interface Resource {
   availableQuantity: number;
   maxConcurrentUsage: number | null;
   isGlobal: boolean;
+  allocations?: Array<{
+    id: string;
+    quantity: number;
+    event: {
+      id: string;
+      title: string;
+      startTime: string;
+      endTime: string;
+    };
+  }>;
 }
 
 function ResourcesList() {
@@ -37,11 +47,8 @@ function ResourcesList() {
 
   const loadResources = async () => {
     try {
-      const params: any = {};
-      if (!isAdmin && user?.organizationId) {
-        params.organizationId = user.organizationId;
-      }
-      const response = await api.get('/resources', { params });
+      // Backend will automatically filter for org admins (own org + global resources)
+      const response = await api.get('/resources');
       setResources(response.data);
     } catch (error) {
       console.error('Failed to load resources:', error);
@@ -177,7 +184,7 @@ function ResourcesList() {
               </select>
             </div>
             <div className="form-group">
-              <label>Available Quantity *</label>
+              <label>Total Quantity *</label>
               <input
                 type="number"
                 min="0"
@@ -226,7 +233,8 @@ function ResourcesList() {
             <tr>
               <th>Name</th>
               <th>Type</th>
-              <th>Available Quantity</th>
+              <th>Total Quantity</th>
+              <th>Active allocations</th>
               <th>Max Concurrent</th>
               <th>Global</th>
               <th>Actions</th>
@@ -235,42 +243,66 @@ function ResourcesList() {
           <tbody>
             {resources.length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ textAlign: 'center' }}>
+                <td colSpan={7} style={{ textAlign: 'center' }}>
                   No resources found. Create your first resource!
                 </td>
               </tr>
             ) : (
-              resources.map((resource) => (
-                <tr key={resource.id}>
-                  <td>{resource.name}</td>
-                  <td>
-                    <span className={`badge badge-${resource.type === 'exclusive' ? 'warning' : resource.type === 'shareable' ? 'info' : 'success'}`}>
-                      {resource.type}
-                    </span>
-                  </td>
-                  <td>{resource.availableQuantity}</td>
-                  <td>{resource.maxConcurrentUsage || '-'}</td>
-                  <td>{resource.isGlobal ? 'Yes' : 'No'}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      {(isAdmin || (isOrg && resource.organizationId === user?.organizationId)) && (
-                        <button
-                          onClick={() => handleEdit(resource)}
-                          className="btn btn-sm btn-secondary"
-                        >
-                          Edit
-                        </button>
+              resources.map((resource) => {
+                // Calculate allocated quantity from current allocations
+                const allocatedQuantity = resource.allocations?.reduce((sum, alloc) => sum + alloc.quantity, 0) || 0;
+                
+                return (
+                  <tr key={resource.id}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{resource.name}</div>
+                    </td>
+                    <td>
+                      <span className={`badge badge-${resource.type === 'exclusive' ? 'warning' : resource.type === 'shareable' ? 'info' : 'success'}`}>
+                        {resource.type}
+                      </span>
+                    </td>
+                    <td>
+                      <div style={{ fontSize: '1rem', color: 'var(--gray-700)' }}>
+                        {resource.availableQuantity}
+                      </div>
+                    </td>
+                    <td>
+                      <span className={`badge badge-${allocatedQuantity > 0 ? 'warning' : 'gray'}`}>
+                        {allocatedQuantity}
+                      </span>
+                    </td>
+                    <td>{resource.maxConcurrentUsage || '-'}</td>
+                    <td>
+                      {resource.isGlobal ? (
+                        <span className="badge badge-info">Global</span>
+                      ) : (
+                        <span className="badge badge-gray">Org</span>
                       )}
-                      <button
-                        onClick={() => deleteResource(resource.id)}
-                        className="btn btn-sm btn-danger"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        {(isAdmin || (isOrg && resource.organizationId === user?.organizationId)) && (
+                          <button
+                            onClick={() => handleEdit(resource)}
+                            className="btn btn-sm btn-secondary"
+                          >
+                            Edit
+                          </button>
+                        )}
+                        {(isAdmin || (isOrg && resource.organizationId === user?.organizationId)) && (
+                          <button
+                            onClick={() => deleteResource(resource.id)}
+                            className="btn btn-sm btn-danger"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

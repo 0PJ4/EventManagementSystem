@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, Request, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, Request, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ResourcesService } from './resources.service';
 import { CreateResourceDto } from './dto/create-resource.dto';
 import { UpdateResourceDto } from './dto/update-resource.dto';
@@ -15,9 +15,17 @@ export class ResourcesController {
 
   @Post()
   create(@Body() createResourceDto: CreateResourceDto, @Request() req) {
-    // Org admins can only create resources for their organization
-    if (req.user.role === UserRole.ORG && createResourceDto.organizationId !== req.user.organizationId) {
-      throw new ForbiddenException('You can only create resources for your organization');
+    // Org admins can create resources for their organization OR global resources
+    if (req.user.role === UserRole.ORG) {
+      // If creating a global resource, organizationId must be null
+      if (createResourceDto.isGlobal) {
+        createResourceDto.organizationId = null;
+      } else {
+        // If creating org-specific resource, must be for their organization
+        if (createResourceDto.organizationId !== req.user.organizationId) {
+          throw new ForbiddenException('You can only create resources for your organization');
+        }
+      }
     }
     return this.resourcesService.create(createResourceDto);
   }
@@ -26,7 +34,15 @@ export class ResourcesController {
   findAll(
     @Query('organizationId') organizationId?: string,
     @Query('isGlobal') isGlobal?: string,
+    @Request() req?,
   ) {
+    // Org admins should see: their own org resources + global resources
+    // Admins see: all resources
+    if (req.user.role === UserRole.ORG && !organizationId && !isGlobal) {
+      // If no specific filter, show org resources + global resources
+      return this.resourcesService.findAllForOrgAdmin(req.user.organizationId);
+    }
+    
     return this.resourcesService.findAll(
       organizationId,
       isGlobal === 'true' ? true : isGlobal === 'false' ? false : undefined,
@@ -36,6 +52,18 @@ export class ResourcesController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.resourcesService.findOne(id);
+  }
+
+  @Get(':id/availability')
+  async getAvailability(
+    @Param('id') id: string,
+    @Query('startTime') startTime: string,
+    @Query('endTime') endTime: string,
+  ) {
+    if (!startTime || !endTime) {
+      throw new BadRequestException('startTime and endTime query parameters are required');
+    }
+    return this.resourcesService.getAvailability(id, new Date(startTime), new Date(endTime));
   }
 
   @Patch(':id')
