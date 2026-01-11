@@ -23,8 +23,9 @@ export class EventsController {
     // Filter events based on user role
     const userRole = req.user.role;
     const userOrgId = req.user.organizationId;
+    const userId = req.user.id;
     
-    return this.eventsService.findAll(organizationId, userRole, userOrgId);
+    return this.eventsService.findAll(organizationId, userRole, userOrgId, userId);
   }
 
   @Get(':id')

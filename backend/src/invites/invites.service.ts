@@ -79,22 +79,6 @@ export class InvitesService {
       // Independent users (user.organizationId === null) can be invited to any event
     }
 
-    // Check if invite already exists
-    const existingInvite = await this.inviteRepository.findOne({
-      where: createInviteDto.userId
-        ? { eventId: createInviteDto.eventId, userId: createInviteDto.userId }
-        : { eventId: createInviteDto.eventId, userEmail: createInviteDto.userEmail },
-    });
-
-    if (existingInvite) {
-      if (existingInvite.status === InviteStatus.PENDING) {
-        throw new ConflictException('Invite already sent and is pending');
-      }
-      if (existingInvite.status === InviteStatus.ACCEPTED) {
-        throw new ConflictException('User already accepted this invite');
-      }
-    }
-
     // Check if user is already registered for the event
     if (createInviteDto.userId) {
       const existingAttendance = await this.attendancesService.findAll(
@@ -107,6 +91,28 @@ export class InvitesService {
       if (isAlreadyRegistered) {
         throw new ConflictException('User is already registered for this event');
       }
+    }
+
+    // Check if invite already exists
+    const existingInvite = await this.inviteRepository.findOne({
+      where: createInviteDto.userId
+        ? { eventId: createInviteDto.eventId, userId: createInviteDto.userId }
+        : { eventId: createInviteDto.eventId, userEmail: createInviteDto.userEmail },
+    });
+
+    if (existingInvite) {
+      if (existingInvite.status === InviteStatus.PENDING) {
+        throw new ConflictException('Invite already sent and is pending');
+      }
+      // Allow resending invite if user previously accepted but is no longer registered
+      // The check above for isAlreadyRegistered ensures user is not currently registered
+      if (existingInvite.status === InviteStatus.ACCEPTED) {
+        // User accepted but unregistered - reset invite to PENDING to allow resending
+        existingInvite.status = InviteStatus.PENDING;
+        existingInvite.respondedAt = null;
+        return this.inviteRepository.save(existingInvite);
+      }
+      // If status is DECLINED or CANCELLED, allow creating a new invite (will be handled below)
     }
 
     const invite = this.inviteRepository.create(createInviteDto);

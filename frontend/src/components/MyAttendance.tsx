@@ -57,15 +57,32 @@ function MyAttendance() {
     );
   }
 
-  // Calculate statistics
-  const totalRegistered = attendances.length;
-  const totalAttended = attendances.filter(att => att.checkedInAt).length;
-  const attendanceRate = totalRegistered > 0 
-    ? Math.round((totalAttended / totalRegistered) * 100) 
-    : 0;
-
-  // Filter past events (events that have ended)
+  // Filter events that have started (past + ongoing) - only these count for attendance percentage
   const now = new Date();
+  const pastAndOngoingAttendances = attendances.filter(att => {
+    if (!att.event) return false;
+    const eventEnd = new Date(att.event.endTime);
+    const eventStart = new Date(att.event.startTime);
+    // Include events that have started (ongoing or past)
+    return now >= eventStart;
+  });
+
+  // Calculate statistics based on past and ongoing events
+  // Only events that have started are considered for attendance percentage
+  const totalPastAndOngoing = pastAndOngoingAttendances.length;
+  const totalAttended = pastAndOngoingAttendances.filter(att => att.checkedInAt).length;
+  const totalMissed = totalPastAndOngoing - totalAttended; // Events that started but user didn't check in
+  
+  // Attendance rate: (attended events / total past and ongoing events) * 100
+  // This automatically reduces percentage if user missed events (didn't check in)
+  const attendanceRate = totalPastAndOngoing > 0 
+    ? Math.round((totalAttended / totalPastAndOngoing) * 100) 
+    : 0;
+  
+  // Total registered includes all events (past + ongoing + upcoming)
+  const totalRegistered = attendances.length;
+
+  // Filter past events (events that have ended) for display
   const pastAttendances = attendances.filter(att => 
     att.event && new Date(att.event.endTime) < now
   );
@@ -92,8 +109,15 @@ function MyAttendance() {
           <div className="stat-label">Events Attended</div>
         </div>
         <div className="stat-card">
+          <div className="stat-value">{totalMissed}</div>
+          <div className="stat-label">Events Missed</div>
+        </div>
+        <div className="stat-card">
           <div className="stat-value">{attendanceRate}%</div>
           <div className="stat-label">Attendance Rate</div>
+          <small style={{ fontSize: '0.75rem', color: 'var(--gray-500)', marginTop: '0.25rem', display: 'block' }}>
+            Based on {totalPastAndOngoing} started event{totalPastAndOngoing !== 1 ? 's' : ''}
+          </small>
         </div>
       </div>
 

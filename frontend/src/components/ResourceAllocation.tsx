@@ -38,6 +38,8 @@ function ResourceAllocation() {
     quantity: 1,
   });
   const [showForm, setShowForm] = useState(false);
+  const [editingAllocation, setEditingAllocation] = useState<string | null>(null);
+  const [editQuantity, setEditQuantity] = useState<number>(1);
 
   useEffect(() => {
     if (user) {
@@ -77,6 +79,28 @@ function ResourceAllocation() {
     } catch (error: any) {
       console.error('Failed to allocate resource:', error);
       alert(error.response?.data?.message || 'Failed to allocate resource');
+    }
+  };
+
+  const handleEdit = (allocation: Allocation) => {
+    setEditingAllocation(allocation.id);
+    setEditQuantity(allocation.quantity);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingAllocation(null);
+    setEditQuantity(1);
+  };
+
+  const handleUpdateAllocation = async (id: string) => {
+    try {
+      await api.patch(`/allocations/${id}`, { quantity: editQuantity });
+      setEditingAllocation(null);
+      setEditQuantity(1);
+      loadData();
+    } catch (error: any) {
+      console.error('Failed to update allocation:', error);
+      alert(error.response?.data?.message || 'Failed to update allocation');
     }
   };
 
@@ -155,56 +179,226 @@ function ResourceAllocation() {
           </form>
         )}
 
-        <table>
-          <thead>
-            <tr>
-              <th>Event</th>
-              <th>Resource</th>
-              <th>Type</th>
-              <th>Quantity</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {allocations.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ textAlign: 'center' }}>
-                  No allocations found. Allocate a resource to an event!
-                </td>
-              </tr>
-            ) : (
-              allocations
-                .filter((alloc) => {
-                  const event = events.find((e) => e.id === alloc.eventId);
-                  return event && event.id;
-                })
-                .map((allocation) => {
-                  const event = events.find((e) => e.id === allocation.eventId);
-                  const resource = resources.find((r) => r.id === allocation.resourceId);
-                  return (
-                    <tr key={allocation.id}>
-                      <td>{event?.title || 'Unknown'}</td>
-                      <td>{resource?.name || 'Unknown'}</td>
-                      <td>
-                        <span className={`badge badge-${resource?.type === 'exclusive' ? 'warning' : resource?.type === 'shareable' ? 'info' : 'success'}`}>
+        {allocations.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--gray-600)' }}>
+            No allocations found. Allocate a resource to an event!
+          </div>
+        ) : (
+          (() => {
+            const now = new Date();
+            
+            // Helper function to format date/time
+            const formatDateTime = (dateString: string): string => {
+              const date = new Date(dateString);
+              return date.toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              });
+            };
+
+            // Helper function to get event status
+            const getEventStatus = (startTime: string, endTime: string): { label: string; badge: string } => {
+              const start = new Date(startTime);
+              const end = new Date(endTime);
+              if (end < now) return { label: 'Past', badge: 'gray' };
+              if (start <= now && end >= now) return { label: 'Ongoing', badge: 'info' };
+              return { label: 'Upcoming', badge: 'success' };
+            };
+
+            // Helper function to calculate duration
+            const calculateDuration = (startTime: string, endTime: string): string => {
+              const start = new Date(startTime);
+              const end = new Date(endTime);
+              const diffMs = end.getTime() - start.getTime();
+              const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+              const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+              
+              if (diffHours > 0) {
+                return `${diffHours}h ${diffMinutes > 0 ? `${diffMinutes}m` : ''}`.trim();
+              }
+              return `${diffMinutes}m`;
+            };
+
+            // Group allocations by resource
+            const allocationsWithData = allocations
+              .filter((alloc) => {
+                const event = events.find((e) => e.id === alloc.eventId);
+                return event && event.id;
+              })
+              .map((allocation) => {
+                const event = events.find((e) => e.id === allocation.eventId);
+                const resource = resources.find((r) => r.id === allocation.resourceId);
+                return {
+                  ...allocation,
+                  event,
+                  resource,
+                };
+              });
+
+            // Group by resource
+            const groupedByResource: { [resourceId: string]: typeof allocationsWithData } = {};
+            allocationsWithData.forEach((alloc) => {
+              if (alloc.resource) {
+                if (!groupedByResource[alloc.resourceId]) {
+                  groupedByResource[alloc.resourceId] = [];
+                }
+                groupedByResource[alloc.resourceId].push(alloc);
+              }
+            });
+
+            const resourceIds = Object.keys(groupedByResource).sort((a, b) => {
+              const resourceA = resources.find((r) => r.id === a);
+              const resourceB = resources.find((r) => r.id === b);
+              return (resourceA?.name || '').localeCompare(resourceB?.name || '');
+            });
+
+            return resourceIds.map((resourceId) => {
+              const resource = resources.find((r) => r.id === resourceId);
+              let resourceAllocations = groupedByResource[resourceId];
+
+              // Sort allocations by start time (upcoming first, then past)
+              resourceAllocations = [...resourceAllocations].sort((a, b) => {
+                const startA = a.event?.startTime ? new Date(a.event.startTime).getTime() : 0;
+                const startB = b.event?.startTime ? new Date(b.event.startTime).getTime() : 0;
+                return startB - startA; // Descending (newest/upcoming first)
+              });
+
+              return (
+                <div key={resourceId} style={{ marginBottom: '2rem' }}>
+                  <div
+                    style={{
+                      padding: '1rem 1.25rem',
+                      background: 'var(--gray-50)',
+                      borderRadius: 'var(--radius-md)',
+                      marginBottom: '0.75rem',
+                      border: '1px solid var(--gray-200)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <h3 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600, color: 'var(--gray-900)' }}>
+                          {resource?.name || 'Unknown Resource'}
+                        </h3>
+                        <span
+                          className={`badge badge-${
+                            resource?.type === 'exclusive' ? 'warning' : resource?.type === 'shareable' ? 'info' : 'success'
+                          }`}
+                        >
                           {resource?.type || 'Unknown'}
                         </span>
-                      </td>
-                      <td>{allocation.quantity}</td>
-                      <td>
-                        <button
-                          onClick={() => deleteAllocation(allocation.id)}
-                          className="btn btn-small btn-danger"
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-            )}
-          </tbody>
-        </table>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', color: 'var(--gray-600)' }}>
+                        <span>
+                          <strong>{resourceAllocations.length}</strong> allocation{resourceAllocations.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="table-container">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Event</th>
+                          <th>Start Time</th>
+                          <th>End Time</th>
+                          <th>Duration</th>
+                          <th>Status</th>
+                          <th>Quantity</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {resourceAllocations.map((allocation) => {
+                          const startTime = allocation.event?.startTime || '';
+                          const endTime = allocation.event?.endTime || '';
+                          const duration = startTime && endTime ? calculateDuration(startTime, endTime) : 'N/A';
+                          const status = startTime && endTime ? getEventStatus(startTime, endTime) : { label: 'Unknown', badge: 'gray' };
+
+                          return (
+                            <tr key={allocation.id}>
+                              <td>
+                                <div style={{ fontWeight: 600, color: 'var(--gray-900)' }}>
+                                  {allocation.event?.title || 'Unknown'}
+                                </div>
+                              </td>
+                              <td style={{ fontSize: '0.875rem', color: 'var(--gray-700)' }}>
+                                {startTime ? formatDateTime(startTime) : 'N/A'}
+                              </td>
+                              <td style={{ fontSize: '0.875rem', color: 'var(--gray-700)' }}>
+                                {endTime ? formatDateTime(endTime) : 'N/A'}
+                              </td>
+                              <td style={{ fontSize: '0.875rem', color: 'var(--gray-600)' }}>
+                                {duration}
+                              </td>
+                              <td>
+                                <span className={`badge badge-${status.badge}`} style={{ fontSize: '0.75rem' }}>
+                                  {status.label}
+                                </span>
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                {editingAllocation === allocation.id ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      value={editQuantity}
+                                      onChange={(e) => setEditQuantity(parseInt(e.target.value) || 1)}
+                                      style={{ width: '80px', padding: '0.25rem', border: '1px solid var(--gray-300)', borderRadius: 'var(--radius-sm)' }}
+                                    />
+                                  </div>
+                                ) : (
+                                  <span className={`badge badge-${allocation.quantity > 1 ? 'info' : 'gray'}`}>
+                                    {allocation.quantity}
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                {editingAllocation === allocation.id ? (
+                                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button
+                                      onClick={() => handleUpdateAllocation(allocation.id)}
+                                      className="btn btn-sm btn-primary"
+                                    >
+                                      Save
+                                    </button>
+                                    <button
+                                      onClick={handleCancelEdit}
+                                      className="btn btn-sm btn-secondary"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button
+                                      onClick={() => handleEdit(allocation)}
+                                      className="btn btn-sm btn-secondary"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      onClick={() => deleteAllocation(allocation.id)}
+                                      className="btn btn-sm btn-danger"
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            });
+          })()
+        )}
       </div>
     </div>
   );

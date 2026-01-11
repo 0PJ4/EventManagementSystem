@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import ActionsDropdown from './ActionsDropdown';
 import '../App.css';
 
 interface Event {
@@ -14,6 +15,8 @@ interface Event {
   status: string;
   allowExternalAttendees: boolean;
   organization?: { name: string };
+  organizationId?: string | null;
+  resourceCount?: number;
 }
 
 interface Attendance {
@@ -21,6 +24,10 @@ interface Attendance {
   eventId: string;
   userId: string;
   checkedInAt: Date | null;
+  event?: {
+    startTime: string;
+    endTime: string;
+  };
 }
 
 function EventsList() {
@@ -28,7 +35,14 @@ function EventsList() {
   const [events, setEvents] = useState<Event[]>([]);
   const [myAttendances, setMyAttendances] = useState<Attendance[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'available' | 'registered'>('available');
+  const [activeTab, setActiveTab] = useState<'available' | 'registered' | 'ongoing' | 'past' | 'upcoming'>('available');
+  
+  // Set default tab based on role after mount
+  useEffect(() => {
+    if (isAdmin || isOrg) {
+      setActiveTab('upcoming');
+    }
+  }, [isAdmin, isOrg]);
 
   useEffect(() => {
     loadData();
@@ -42,12 +56,17 @@ function EventsList() {
         user ? api.get('/attendances').catch(() => ({ data: [] })) : Promise.resolve({ data: [] })
       ]);
       
-      setEvents(eventsRes.data || []);
+      const eventsData = eventsRes.data || [];
+      setEvents(eventsData);
       
-      // Filter attendances for current user
-      const userAttendances = (attendancesRes.data || []).filter(
-        (att: Attendance) => att.userId === user?.id
-      );
+      // Filter attendances for current user and attach event details
+      const allAttendances = attendancesRes.data || [];
+      const userAttendances = allAttendances
+        .filter((att: Attendance) => att.userId === user?.id)
+        .map((att: Attendance) => {
+          const event = eventsData.find((e: Event) => e.id === att.eventId);
+          return { ...att, event };
+        });
       setMyAttendances(userAttendances);
     } catch (error: any) {
       console.error('Failed to load events:', error);
@@ -89,6 +108,17 @@ function EventsList() {
     }
   };
 
+  const checkInForEvent = async (attendanceId: string) => {
+    try {
+      await api.post(`/attendances/${attendanceId}/checkin`);
+      alert('Successfully checked in!');
+      loadData();
+    } catch (error: any) {
+      console.error('Failed to check in:', error);
+      alert(error.response?.data?.message || 'Failed to check in');
+    }
+  };
+
   const deleteEvent = async (id: string) => {
     if (!confirm('Are you sure you want to delete this event?')) return;
     try {
@@ -112,8 +142,51 @@ function EventsList() {
   const registeredEventIds = new Set(myAttendances.map(att => att.eventId));
   const registeredEvents = events.filter(event => registeredEventIds.has(event.id));
   const availableEvents = events.filter(event => !registeredEventIds.has(event.id));
+  
+  // Time-based filtering
+  const now = new Date();
+  
+  // For users: ongoing events (must be registered)
+  const userOngoingEvents = registeredEvents.filter(event => {
+    const eventStart = new Date(event.startTime);
+    const eventEnd = new Date(event.endTime);
+    return now >= eventStart && now <= eventEnd;
+  });
+  
+  // For users: past events (must be registered, event has ended)
+  const userPastEvents = registeredEvents.filter(event => {
+    const eventEnd = new Date(event.endTime);
+    return now > eventEnd;
+  });
+  
+  // For admins/org admins: all ongoing events (including draft events)
+  const adminOngoingEvents = events.filter(event => {
+    const eventStart = new Date(event.startTime);
+    const eventEnd = new Date(event.endTime);
+    return now >= eventStart && now <= eventEnd;
+  });
+  
+  // For admins/org admins: upcoming events (not started yet)
+  const upcomingEvents = events.filter(event => {
+    const eventStart = new Date(event.startTime);
+    return now < eventStart;
+  });
+  
+  // For admins/org admins: past events (already ended)
+  const adminPastEvents = events.filter(event => {
+    const eventEnd = new Date(event.endTime);
+    return now > eventEnd;
+  });
 
-  const displayEvents = activeTab === 'available' ? availableEvents : registeredEvents;
+  const displayEvents = activeTab === 'available' 
+    ? availableEvents 
+    : activeTab === 'ongoing'
+    ? (isAdmin || isOrg ? adminOngoingEvents : userOngoingEvents)
+    : activeTab === 'past'
+    ? (isAdmin || isOrg ? adminPastEvents : userPastEvents)
+    : activeTab === 'upcoming'
+    ? upcomingEvents
+    : registeredEvents;
 
   return (
     <div className="card">
@@ -153,6 +226,49 @@ function EventsList() {
           >
             My Registered Events ({registeredEvents.length})
           </button>
+          <button
+            onClick={() => setActiveTab('ongoing')}
+            className={`btn ${activeTab === 'ongoing' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Ongoing Events ({userOngoingEvents.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('past')}
+            className={`btn ${activeTab === 'past' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Past Events ({userPastEvents.length})
+          </button>
+        </div>
+      )}
+      
+      {/* Tab Navigation for Admins/Org Admins */}
+      {(isAdmin || isOrg) && (
+        <div style={{ 
+          display: 'flex', 
+          gap: '0.5rem', 
+          marginBottom: '1.5rem',
+          borderBottom: '2px solid var(--gray-200)',
+          paddingBottom: '0.5rem',
+          flexWrap: 'wrap'
+        }}>
+          <button
+            onClick={() => setActiveTab('upcoming')}
+            className={`btn ${activeTab === 'upcoming' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Upcoming Events ({upcomingEvents.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('ongoing')}
+            className={`btn ${activeTab === 'ongoing' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Ongoing Events ({adminOngoingEvents.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('past')}
+            className={`btn ${activeTab === 'past' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Past Events ({adminPastEvents.length})
+          </button>
         </div>
       )}
 
@@ -168,6 +284,12 @@ function EventsList() {
           <p>
             {activeTab === 'available' 
               ? 'No available events at the moment. Check back later!' 
+              : activeTab === 'ongoing'
+              ? 'No ongoing events at the moment.'
+              : activeTab === 'past'
+              ? 'No past events found.'
+              : activeTab === 'upcoming'
+              ? 'No upcoming events found.'
               : 'You haven\'t registered for any events yet.'}
           </p>
           {(isAdmin || isOrg) && activeTab === 'available' && (
@@ -188,6 +310,7 @@ function EventsList() {
                 <th>Capacity</th>
                 <th>Status</th>
                 {(isAdmin || isOrg) && <th>External</th>}
+                {(isAdmin || isOrg) && <th>Resources</th>}
                 <th>Actions</th>
               </tr>
             </thead>
@@ -221,58 +344,92 @@ function EventsList() {
                         )}
                       </td>
                     )}
+                    {(isAdmin || isOrg) && (
+                      <td>
+                        {/* Show resource count only to the owning org admin */}
+                        {(isAdmin || (isOrg && event.organizationId === user?.organizationId)) ? (
+                          <span className="badge badge-info">
+                            {event.resourceCount || 0} resource{(event.resourceCount || 0) !== 1 ? 's' : ''}
+                          </span>
+                        ) : (
+                          <span className="badge badge-gray" title="Resource count only visible to event owner">
+                            -
+                          </span>
+                        )}
+                      </td>
+                    )}
                     <td>
-                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        {/* User Registration Actions */}
-                        {!isAdmin && !isOrg && (
-                          <>
-                            {!isRegistered ? (
-                              <button
-                                onClick={() => registerForEvent(event.id)}
-                                className="btn btn-sm btn-success"
-                              >
-                                Register
-                              </button>
-                            ) : (
-                              <>
-                                <Link 
-                                  to={`/events/${event.id}/attendees`}
-                                  className="btn btn-sm btn-secondary"
-                                >
-                                  View Attendees
-                                </Link>
-                                <button
-                                  onClick={() => unregisterFromEvent(attendance.id)}
-                                  className="btn btn-sm btn-danger"
-                                >
-                                  Unregister
-                                </button>
-                              </>
+                      {(() => {
+                        const actions: Array<{ label: string; onClick?: () => void; to?: string; danger?: boolean }> = [];
+                        const now = new Date();
+                        const eventStart = new Date(event.startTime);
+                        const eventEnd = new Date(event.endTime);
+                        const canCheckIn = isRegistered && !attendance?.checkedInAt && now >= eventStart && now <= eventEnd;
+                        const isCheckedIn = attendance?.checkedInAt;
+
+                        // User actions (for regular users)
+                        if (!isAdmin && !isOrg) {
+                          if (!isRegistered) {
+                            actions.push({
+                              label: 'Register',
+                              onClick: () => registerForEvent(event.id),
+                            });
+                          } else {
+                            actions.push({
+                              label: 'View Attendees',
+                              to: `/events/${event.id}/attendees`,
+                            });
+                            if (canCheckIn) {
+                              actions.push({
+                                label: 'Check In',
+                                onClick: () => checkInForEvent(attendance.id),
+                              });
+                            }
+                            actions.push({
+                              label: 'Unregister',
+                              onClick: () => {
+                                if (confirm('Are you sure you want to unregister from this event?')) {
+                                  unregisterFromEvent(attendance.id);
+                                }
+                              },
+                              danger: true,
+                            });
+                          }
+                        }
+
+                        // Admin/Org Admin actions
+                        if (isAdmin || (isOrg && event.organizationId === user?.organizationId)) {
+                          actions.push({
+                            label: 'View Attendees',
+                            to: `/events/${event.id}/attendees`,
+                          });
+                          actions.push({
+                            label: 'Edit Event',
+                            to: `/events/${event.id}/edit`,
+                          });
+                          actions.push({
+                            label: 'Delete Event',
+                            onClick: () => {
+                              if (confirm('Are you sure you want to delete this event?')) {
+                                deleteEvent(event.id);
+                              }
+                            },
+                            danger: true,
+                          });
+                        }
+
+                        // Render dropdown with check-in badge if applicable
+                        return (
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            {isCheckedIn && (
+                              <span className="badge badge-success" title={`Checked in: ${new Date(attendance.checkedInAt).toLocaleString()}`}>
+                                ✓ Checked In
+                              </span>
                             )}
-                          </>
-                        )}
-                        
-                        {/* Admin/Org Admin Actions */}
-                        {(isAdmin || isOrg) && (
-                          <>
-                            <Link 
-                              to={`/events/${event.id}/attendees`}
-                              className="btn btn-sm btn-secondary"
-                            >
-                              Attendees
-                            </Link>
-                            <Link to={`/events/${event.id}/edit`} className="btn btn-sm btn-secondary">
-                              Edit
-                            </Link>
-                            <button
-                              onClick={() => deleteEvent(event.id)}
-                              className="btn btn-sm btn-danger"
-                            >
-                              Delete
-                            </button>
-                          </>
-                        )}
-                      </div>
+                            {actions.length > 0 && <ActionsDropdown actions={actions} />}
+                          </div>
+                        );
+                      })()}
                     </td>
                   </tr>
                 );

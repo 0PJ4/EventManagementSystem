@@ -97,6 +97,40 @@ body {
   background: var(--gray-50);
 }
 
+/* Sidebar Toggle Button */
+.sidebar-toggle {
+  position: fixed;
+  left: var(--sidebar-width);
+  top: 1rem;
+  z-index: 200;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-md);
+  background: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  box-shadow: var(--shadow-md);
+}
+
+.sidebar-toggle:hover {
+  background: var(--gray-50);
+  border-color: var(--primary-500);
+  color: var(--primary-600);
+}
+
+.sidebar-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
+.app-container.sidebar-collapsed .sidebar-toggle {
+  left: 0;
+}
+
 /* Sidebar Navigation */
 .sidebar {
   position: fixed;
@@ -110,6 +144,15 @@ body {
   flex-direction: column;
   z-index: 100;
   overflow-y: auto;
+  transition: transform 0.3s ease;
+}
+
+.sidebar.collapsed {
+  transform: translateX(-100%);
+}
+
+.sidebar.open {
+  transform: translateX(0);
 }
 
 .sidebar-header {
@@ -233,6 +276,11 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  transition: margin-left 0.3s ease;
+}
+
+.app-container.sidebar-collapsed .main-content {
+  margin-left: 0;
 }
 
 .header {
@@ -708,6 +756,60 @@ tbody tr:last-child td {
 
 .gap-4 {
   gap: var(--spacing-lg);
+}
+
+/* ============================================
+   ACTIONS DROPDOWN
+   ============================================ */
+
+.actions-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.actions-dropdown-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  min-width: 160px;
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.actions-dropdown-item {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  color: var(--gray-700);
+  font-size: 0.875rem;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.actions-dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.actions-dropdown-item:hover {
+  background: var(--gray-50);
+  color: var(--gray-900);
+}
+
+.actions-dropdown-item.danger {
+  color: var(--danger);
+}
+
+.actions-dropdown-item.danger:hover {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.actions-dropdown-link {
+  text-decoration: none;
+  display: block;
 }
 
 /* ============================================

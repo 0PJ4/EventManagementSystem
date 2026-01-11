@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Body, Param, Delete, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Delete, Patch, Query, UseGuards } from '@nestjs/common';
 import { AllocationsService } from './allocations.service';
 import { CreateAllocationDto } from './dto/create-allocation.dto';
+import { UpdateAllocationDto } from './dto/update-allocation.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -23,6 +24,11 @@ export class AllocationsController {
     @Query('resourceId') resourceId?: string,
   ) {
     return this.allocationsService.findAll(eventId, resourceId);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() updateAllocationDto: UpdateAllocationDto) {
+    return this.allocationsService.update(id, updateAllocationDto);
   }
 
   @Delete(':id')

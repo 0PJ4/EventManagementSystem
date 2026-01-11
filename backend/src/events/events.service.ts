@@ -47,24 +47,26 @@ export class EventsService {
     return this.eventRepository.save(event);
   }
 
-  async findAll(organizationId?: string, userRole?: string, userOrgId?: string): Promise<Event[]> {
+  async findAll(organizationId?: string, userRole?: string, userOrgId?: string, userId?: string): Promise<Event[]> {
+    let events: Event[];
+    
     // Admin can see all events (including drafts)
     if (userRole === UserRole.ADMIN) {
       if (organizationId) {
-        return this.eventRepository.find({
+        events = await this.eventRepository.find({
           where: { organizationId },
-          relations: ['organization', 'parentEvent', 'childEvents'],
+          relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
+          order: { startTime: 'ASC' },
+        });
+      } else {
+        events = await this.eventRepository.find({
+          relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
           order: { startTime: 'ASC' },
         });
       }
-      return this.eventRepository.find({
-        relations: ['organization', 'parentEvent', 'childEvents'],
-        order: { startTime: 'ASC' },
-      });
     }
-    
     // Org admin: own org events (including drafts) OR published events with external attendees
-    if (userRole === UserRole.ORG && userOrgId) {
+    else if (userRole === UserRole.ORG && userOrgId) {
       const whereConditions: any[] = [];
       
       // Own organization events (all statuses)
@@ -76,29 +78,36 @@ export class EventsService {
         status: 'published' 
       });
       
-      return this.eventRepository.find({
+      events = await this.eventRepository.find({
         where: whereConditions,
-        relations: ['organization', 'parentEvent', 'childEvents'],
+        relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
+        order: { startTime: 'ASC' },
+      });
+    } else {
+      // Regular users: published events from their org OR published events with external attendees
+      const whereConditions: any[] = [];
+      
+      if (userOrgId) {
+        // Published events from user's organization
+        whereConditions.push({ organizationId: userOrgId, status: 'published' });
+      }
+      
+      // Published events that allow external attendees (everyone can see and register)
+      whereConditions.push({ allowExternalAttendees: true, status: 'published' });
+      
+      events = await this.eventRepository.find({
+        where: whereConditions,
+        relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
         order: { startTime: 'ASC' },
       });
     }
-    
-    // Regular users: published events from their org OR published events with external attendees
-    const whereConditions: any[] = [];
-    
-    if (userOrgId) {
-      // Published events from user's organization
-      whereConditions.push({ organizationId: userOrgId, status: 'published' });
+
+    // Add resource count for each event
+    for (const event of events) {
+      (event as any).resourceCount = event.resourceAllocations?.length || 0;
     }
-    
-    // Published events that allow external attendees (everyone can see and register)
-    whereConditions.push({ allowExternalAttendees: true, status: 'published' });
-    
-    return this.eventRepository.find({
-      where: whereConditions,
-      relations: ['organization', 'parentEvent', 'childEvents'],
-      order: { startTime: 'ASC' },
-    });
+
+    return events;
   }
 
   async findOne(id: string): Promise<Event> {

@@ -2,13 +2,34 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import ResourceAvailabilityViewer from './ResourceAvailabilityViewer';
 import '../App.css';
+
+interface Resource {
+  id: string;
+  name: string;
+  type: string;
+  availableQuantity: number;
+  maxConcurrentUsage: number | null;
+  isGlobal: boolean;
+  organizationId: string | null;
+}
+
+interface ResourceAllocation {
+  id: string;
+  resourceId: string;
+  quantity: number;
+  resource?: Resource;
+  availabilityDetails?: any;
+}
 
 function EventForm() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isOrg } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [resources, setResources] = useState<Resource[]>([]);
+  const [resourceAllocations, setResourceAllocations] = useState<ResourceAllocation[]>([]);
   const [event, setEvent] = useState({
     title: '',
     description: '',
@@ -21,14 +42,21 @@ function EventForm() {
     parentEventId: '',
   });
   const [parentEvents, setParentEvents] = useState<any[]>([]);
+  const [organizations, setOrganizations] = useState<any[]>([]);
 
   useEffect(() => {
     if (user) {
       if (!id) {
-        // For new events, set organization from user
-        setEvent((prev) => ({ ...prev, organizationId: user.organizationId || '' }));
+        // Only set default org for org admins, admins can choose
+        if (isOrg) {
+          setEvent((prev) => ({ ...prev, organizationId: user.organizationId || '' }));
+        } else if (isAdmin) {
+          setEvent((prev) => ({ ...prev, organizationId: '' }));
+        }
       }
+      loadOrganizations();
       loadParentEvents();
+      loadResources();
     }
     if (id) {
       loadEvent();
@@ -50,9 +78,34 @@ function EventForm() {
         organizationId: eventData.organizationId || user?.organizationId || '',
         parentEventId: eventData.parentEventId || '',
       });
+      
+      // Load existing resource allocations
+      if (id) {
+        const allocationsRes = await api.get(`/allocations?eventId=${id}`);
+        setResourceAllocations(allocationsRes.data || []);
+      }
     } catch (error) {
       console.error('Failed to load event:', error);
       alert('Failed to load event');
+    }
+  };
+
+  const loadResources = async () => {
+    try {
+      const response = await api.get('/resources');
+      setResources(response.data || []);
+    } catch (error) {
+      console.error('Failed to load resources:', error);
+    }
+  };
+
+  const loadOrganizations = async () => {
+    if (!isAdmin) return; // Only admins need to load organizations
+    try {
+      const response = await api.get('/organizations');
+      setOrganizations(response.data || []);
+    } catch (error) {
+      console.error('Failed to load organizations:', error);
     }
   };
 
@@ -69,9 +122,74 @@ function EventForm() {
     }
   };
 
+  const addResourceAllocation = () => {
+    setResourceAllocations([...resourceAllocations, { id: '', resourceId: '', quantity: 1 }]);
+  };
+
+  const updateResourceAllocation = (index: number, field: 'resourceId' | 'quantity', value: string | number) => {
+    const updated = [...resourceAllocations];
+    updated[index] = { ...updated[index], [field]: value };
+    setResourceAllocations(updated);
+  };
+
+  const removeResourceAllocation = (index: number) => {
+    setResourceAllocations(resourceAllocations.filter((_, i) => i !== index));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Prevent duplicate submissions
+    if (loading) {
+      return;
+    }
+
+    // Validate resource availability before submission
+    const newAllocations = resourceAllocations.filter(a => !a.id && a.resourceId);
+    if (newAllocations.length > 0 && event.startTime && event.endTime) {
+      const availabilityChecks = newAllocations.map(async (alloc) => {
+        if (!alloc.availabilityDetails) {
+          // If availability wasn't checked, check it now
+          try {
+            const response = await api.get(`/resources/${alloc.resourceId}/availability`, {
+              params: {
+                startTime: new Date(event.startTime).toISOString(),
+                endTime: new Date(event.endTime).toISOString(),
+              },
+            });
+            return {
+              allocation: alloc,
+              available: response.data.available && response.data.availableQuantity >= alloc.quantity,
+              details: response.data,
+            };
+          } catch (err) {
+            return { allocation: alloc, available: false, details: null };
+          }
+        } else {
+          return {
+            allocation: alloc,
+            available: alloc.availabilityDetails.available && alloc.availabilityDetails.availableQuantity >= alloc.quantity,
+            details: alloc.availabilityDetails,
+          };
+        }
+      });
+
+      const results = await Promise.all(availabilityChecks);
+      const unavailable = results.filter(r => !r.available);
+      
+      if (unavailable.length > 0) {
+        const resourceNames = unavailable.map(r => {
+          const res = resources.find(res => res.id === r.allocation.resourceId);
+          return res?.name || 'Unknown';
+        }).join(', ');
+        alert(`The following resources are not available in the requested quantity: ${resourceNames}\n\nPlease adjust your selections or event time.`);
+        return;
+      }
+    }
+    
     setLoading(true);
+    let createdEventId: string | null = null;
+    
     try {
       const eventData = {
         ...event,
@@ -80,11 +198,52 @@ function EventForm() {
         parentEventId: event.parentEventId || undefined,
       };
 
+      let eventId: string;
       if (id) {
         await api.patch(`/events/${id}`, eventData);
+        eventId = id;
       } else {
-        await api.post('/events', eventData);
+        const createdEvent = await api.post('/events', eventData);
+        eventId = createdEvent.data.id;
+        createdEventId = eventId; // Track if we created a new event
       }
+
+      // Handle resource allocations
+      const existingAllocations = resourceAllocations.filter(a => a.id);
+      const newAllocationsToCreate = resourceAllocations.filter(a => !a.id && a.resourceId);
+      
+      // Delete removed allocations
+      const currentAllocations = await api.get(`/allocations?eventId=${eventId}`);
+      const currentIds = (currentAllocations.data || []).map((a: any) => a.id);
+      const keptIds = existingAllocations.map(a => a.id);
+      const toDelete = currentIds.filter((id: string) => !keptIds.includes(id));
+      
+      await Promise.all(toDelete.map((allocId: string) => api.delete(`/allocations/${allocId}`)));
+
+      // Create new allocations - validate before creating event if it's new
+      try {
+        await Promise.all(
+          newAllocationsToCreate.map(alloc => 
+            api.post('/allocations', {
+              eventId,
+              resourceId: alloc.resourceId,
+              quantity: alloc.quantity,
+            })
+          )
+        );
+      } catch (allocationError: any) {
+        // If allocation fails and we just created the event, delete it
+        if (createdEventId && !id) {
+          try {
+            await api.delete(`/events/${createdEventId}`);
+          } catch (deleteError) {
+            console.error('Failed to delete event after allocation error:', deleteError);
+          }
+        }
+        // Re-throw the allocation error
+        throw allocationError;
+      }
+
       navigate('/events');
     } catch (error: any) {
       console.error('Failed to save event:', error);
@@ -94,91 +253,241 @@ function EventForm() {
     }
   };
 
+  // Filter resources based on event organization
+  const availableResources = resources.filter(r => {
+    if (isAdmin) return true;
+    if (!event.organizationId) return r.isGlobal;
+    return r.organizationId === event.organizationId || r.isGlobal;
+  });
+
   return (
     <div className="card">
       <div className="card-header">
         <h1 className="card-title">{id ? 'Edit Event' : 'Create New Event'}</h1>
       </div>
       <form onSubmit={handleSubmit}>
-        <div className="form-group">
-          <label>Title *</label>
-          <input
-            type="text"
-            value={event.title}
-            onChange={(e) => setEvent({ ...event, title: e.target.value })}
-            required
-          />
-        </div>
-        <div className="form-group">
-          <label>Description</label>
-          <textarea
-            value={event.description}
-            onChange={(e) => setEvent({ ...event, description: e.target.value })}
-          />
-        </div>
-        <div className="form-group">
-          <label>Start Time *</label>
-          <input
-            type="datetime-local"
-            value={event.startTime}
-            onChange={(e) => setEvent({ ...event, startTime: e.target.value })}
-            required
-          />
-        </div>
-        <div className="form-group">
-          <label>End Time *</label>
-          <input
-            type="datetime-local"
-            value={event.endTime}
-            onChange={(e) => setEvent({ ...event, endTime: e.target.value })}
-            required
-          />
-        </div>
-        <div className="form-group">
-          <label>Capacity *</label>
-          <input
-            type="number"
-            min="0"
-            value={event.capacity}
-            onChange={(e) => setEvent({ ...event, capacity: parseInt(e.target.value) })}
-            required
-          />
-        </div>
-        <div className="form-group">
-          <label>Status</label>
-          <select
-            value={event.status}
-            onChange={(e) => setEvent({ ...event, status: e.target.value })}
-          >
-            <option value="draft">Draft</option>
-            <option value="published">Published</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
-        </div>
-        <div className="form-group">
-          <label>Parent Event (optional)</label>
-          <select
-            value={event.parentEventId}
-            onChange={(e) => setEvent({ ...event, parentEventId: e.target.value })}
-          >
-            <option value="">None</option>
-            {parentEvents.map((parent) => (
-              <option key={parent.id} value={parent.id}>
-                {parent.title}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="form-group">
-          <label>
+        {/* Event Details Section */}
+        <div style={{ marginBottom: '2rem' }}>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+            Event Details
+          </h2>
+          <div className="form-group">
+            <label>Title *</label>
             <input
-              type="checkbox"
-              checked={event.allowExternalAttendees}
-              onChange={(e) => setEvent({ ...event, allowExternalAttendees: e.target.checked })}
+              type="text"
+              value={event.title}
+              onChange={(e) => setEvent({ ...event, title: e.target.value })}
+              required
             />
-            Allow External Attendees
-          </label>
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <textarea
+              value={event.description}
+              onChange={(e) => setEvent({ ...event, description: e.target.value })}
+              rows={4}
+            />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
+            <div className="form-group">
+              <label>Start Time *</label>
+              <input
+                type="datetime-local"
+                value={event.startTime}
+                onChange={(e) => setEvent({ ...event, startTime: e.target.value })}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>End Time *</label>
+              <input
+                type="datetime-local"
+                value={event.endTime}
+                onChange={(e) => setEvent({ ...event, endTime: e.target.value })}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Capacity *</label>
+              <input
+                type="number"
+                min="0"
+                value={event.capacity}
+                onChange={(e) => setEvent({ ...event, capacity: parseInt(e.target.value) })}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Status</label>
+              <select
+                value={event.status}
+                onChange={(e) => setEvent({ ...event, status: e.target.value })}
+              >
+                <option value="draft">Draft</option>
+                <option value="published">Published</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+          </div>
+          {isAdmin && (
+            <div className="form-group">
+              <label>Organization *</label>
+              <select
+                value={event.organizationId}
+                onChange={(e) => setEvent({ ...event, organizationId: e.target.value })}
+                required
+              >
+                <option value="">Select Organization</option>
+                {organizations.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name}
+                  </option>
+                ))}
+              </select>
+              <small>Admin can create events for any organization</small>
+            </div>
+          )}
+          {isOrg && (
+            <div className="form-group">
+              <label>Organization</label>
+              <input
+                type="text"
+                value={organizations.find((o: any) => o.id === event.organizationId)?.name || 'Your Organization'}
+                disabled
+              />
+              <small>Events are automatically assigned to your organization</small>
+            </div>
+          )}
+          <div className="form-group">
+            <label>Parent Event (optional)</label>
+            <select
+              value={event.parentEventId}
+              onChange={(e) => setEvent({ ...event, parentEventId: e.target.value })}
+            >
+              <option value="">None</option>
+              {parentEvents.map((parent) => (
+                <option key={parent.id} value={parent.id}>
+                  {parent.title}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={event.allowExternalAttendees}
+                onChange={(e) => setEvent({ ...event, allowExternalAttendees: e.target.checked })}
+              />
+              Allow External Attendees
+            </label>
+          </div>
         </div>
+
+        {/* Resource Allocation Section */}
+        {(isAdmin || isOrg) && (
+          <div style={{ marginBottom: '2rem', padding: '1.5rem', background: 'var(--gray-50)', borderRadius: 'var(--radius-lg)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--gray-900)' }}>
+                Resource Allocation
+              </h2>
+              <button
+                type="button"
+                onClick={addResourceAllocation}
+                className="btn btn-sm btn-secondary"
+              >
+                + Add Resource
+              </button>
+            </div>
+            {resourceAllocations.length === 0 ? (
+              <p style={{ color: 'var(--gray-600)', fontStyle: 'italic' }}>
+                No resources allocated. Click "Add Resource" to assign resources to this event.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {resourceAllocations.map((allocation, index) => {
+                  const selectedResource = resources.find(r => r.id === allocation.resourceId);
+                  return (
+                    <div key={index} style={{ 
+                      display: 'grid', 
+                      gridTemplateColumns: '2fr 1fr auto',
+                      gap: '1rem',
+                      alignItems: 'end',
+                      padding: '1rem',
+                      background: 'white',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--gray-200)'
+                    }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>
+                          Resource *
+                        </label>
+                        <select
+                          value={allocation.resourceId}
+                          onChange={(e) => updateResourceAllocation(index, 'resourceId', e.target.value)}
+                          required
+                          style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--gray-300)', borderRadius: 'var(--radius-sm)' }}
+                        >
+                          <option value="">Select Resource</option>
+                          {availableResources.map((resource) => (
+                            <option key={resource.id} value={resource.id}>
+                              {resource.name} ({resource.type}) {resource.isGlobal ? '[Global]' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        {selectedResource && (
+                          <>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--gray-600)', marginTop: '0.25rem' }}>
+                              Total: {selectedResource.availableQuantity} | 
+                              {selectedResource.type === 'shareable' && selectedResource.maxConcurrentUsage && 
+                                ` Max Concurrent: ${selectedResource.maxConcurrentUsage}`}
+                            </div>
+                            {event.startTime && event.endTime && (
+                              <ResourceAvailabilityViewer
+                                resourceId={allocation.resourceId}
+                                resource={selectedResource}
+                                startTime={event.startTime}
+                                endTime={event.endTime}
+                                requestedQuantity={allocation.quantity}
+                                onAvailabilityCheck={(available, details) => {
+                                  // Store availability status for validation
+                                  const updated = [...resourceAllocations];
+                                  updated[index] = { ...updated[index], availabilityDetails: details };
+                                  setResourceAllocations(updated);
+                                }}
+                              />
+                            )}
+                          </>
+                        )}
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>
+                          Quantity *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={allocation.quantity}
+                          onChange={(e) => updateResourceAllocation(index, 'quantity', parseInt(e.target.value))}
+                          required
+                          style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--gray-300)', borderRadius: 'var(--radius-sm)' }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeResourceAllocation(index)}
+                        className="btn btn-sm btn-danger"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="form-actions">
           <button type="submit" className="btn btn-primary" disabled={loading}>
             {loading ? 'Saving...' : id ? 'Update Event' : 'Create Event'}

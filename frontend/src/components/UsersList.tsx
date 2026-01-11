@@ -310,8 +310,8 @@ function UsersList() {
                 </td>
               </tr>
             ) : (
-              filteredUsers.map((user) => (
-                <tr key={user.id}>
+              filteredUsers.map((userItem) => (
+                <tr key={userItem.id}>
                   <td>
                     <code style={{ 
                       fontSize: '0.85rem', 
@@ -320,41 +320,45 @@ function UsersList() {
                       borderRadius: '4px',
                       fontFamily: 'monospace'
                     }}>
-                      {user.id.substring(0, 8)}...
+                      {userItem.id.substring(0, 8)}...
                     </code>
                   </td>
-                  <td>{user.name}</td>
-                  <td>{user.email}</td>
+                  <td>{userItem.name}</td>
+                  <td>{userItem.email}</td>
                   <td>
                     <span className={`badge badge-${
-                      user.role === 'admin' ? 'danger' :
-                      user.role === 'org' ? 'warning' :
+                      userItem.role === 'admin' ? 'danger' :
+                      userItem.role === 'org' ? 'warning' :
                       'info'
                     }`}>
-                      {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+                      {userItem.role.charAt(0).toUpperCase() + userItem.role.slice(1)}
                     </span>
                   </td>
                   <td>
-                    {user.organizationId 
-                      ? (user.organization?.name || organizations.find(o => o.id === user.organizationId)?.name || 'Unknown')
+                    {userItem.organizationId 
+                      ? (userItem.organization?.name || organizations.find(o => o.id === userItem.organizationId)?.name || 'Unknown')
                       : <span className="badge badge-info">Independent</span>}
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      {isAdmin && (
+                      {/* Admins can edit all users, org admins can edit users in their org */}
+                      {(isAdmin || (isOrg && userItem.organizationId === user?.organizationId)) && (
                         <button
-                          onClick={() => handleEdit(user)}
+                          onClick={() => handleEdit(userItem)}
                           className="btn btn-sm btn-secondary"
                         >
                           Edit
                         </button>
                       )}
-                      <button
-                        onClick={() => deleteUser(user.id)}
-                        className="btn btn-sm btn-danger"
-                      >
-                        Delete
-                      </button>
+                      {/* Admins can delete all users, org admins can delete users in their org */}
+                      {(isAdmin || (isOrg && userItem.organizationId === user?.organizationId)) && (
+                        <button
+                          onClick={() => deleteUser(userItem.id)}
+                          className="btn btn-sm btn-danger"
+                        >
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
