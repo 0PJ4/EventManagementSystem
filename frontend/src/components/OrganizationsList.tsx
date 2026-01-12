@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import '../App.css';
@@ -12,11 +12,12 @@ interface Organization {
 
 function OrganizationsList() {
   const { user, isAdmin } = useAuth();
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({ name: '', emailTemplate: '' });
+  const [allOrganizations, setAllOrganizations] = useState<Organization[]>([]); // Store all orgs from API
   const [showForm, setShowForm] = useState(false);
   const [editingOrg, setEditingOrg] = useState<Organization | null>(null);
+  const [searchTerm, setSearchTerm] = useState<string>('');
 
   useEffect(() => {
     loadOrganizations();
@@ -24,15 +25,16 @@ function OrganizationsList() {
 
   const loadOrganizations = async () => {
     try {
+      setLoading(true);
       const response = await api.get('/organizations');
-      let orgs = response.data;
+      let orgs = response.data || [];
       
       // If org admin, filter to show only their organization
       if (!isAdmin && user?.organizationId) {
         orgs = orgs.filter((org: Organization) => org.id === user.organizationId);
       }
       
-      setOrganizations(orgs);
+      setAllOrganizations(orgs);
     } catch (error) {
       console.error('Failed to load organizations:', error);
       alert('Failed to load organizations.');
@@ -40,6 +42,18 @@ function OrganizationsList() {
       setLoading(false);
     }
   };
+
+  // Client-side filtering with useMemo for performance
+  const organizations = useMemo(() => {
+    if (!searchTerm.trim()) {
+      return allOrganizations;
+    }
+    
+    const searchLower = searchTerm.toLowerCase().trim();
+    return allOrganizations.filter((org: Organization) => 
+      org.name?.toLowerCase().includes(searchLower)
+    );
+  }, [allOrganizations, searchTerm]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -152,6 +166,62 @@ function OrganizationsList() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Search Input (Admin only) */}
+      {isAdmin && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div style={{ position: 'relative', width: '100%' }}>
+            <svg
+              style={{
+                position: 'absolute',
+                left: '0.875rem',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: '20px',
+                height: '20px',
+                color: 'var(--gray-400)',
+                pointerEvents: 'none',
+                zIndex: 1
+              }}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="8"></circle>
+              <path d="m21 21-4.35-4.35"></path>
+            </svg>
+            <input
+              type="text"
+              placeholder="Search organizations by name..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.75rem 1rem 0.75rem 2.75rem',
+                fontSize: '0.9375rem',
+                lineHeight: '1.5',
+                color: 'var(--gray-900)',
+                background: 'white',
+                border: '1px solid var(--gray-300)',
+                borderRadius: 'var(--radius-md)',
+                transition: 'all 0.2s ease',
+                boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = 'var(--primary-500)';
+                e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = 'var(--gray-300)';
+                e.target.style.boxShadow = '0 1px 2px 0 rgba(0, 0, 0, 0.05)';
+              }}
+            />
+          </div>
         </div>
       )}
 

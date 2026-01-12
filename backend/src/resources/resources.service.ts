@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, ILike } from 'typeorm';
 import { Resource } from '../entities/resource.entity';
 import { CreateResourceDto } from './dto/create-resource.dto';
 import { UpdateResourceDto } from './dto/update-resource.dto';
@@ -20,33 +20,78 @@ export class ResourcesService {
     return this.resourceRepository.save(resource);
   }
 
-  async findAll(organizationId?: string, isGlobal?: boolean): Promise<Resource[]> {
-    const where: any = {};
+  async findAll(organizationId?: string, isGlobal?: boolean, search?: string): Promise<Resource[]> {
+    const hasSearch = search && search.trim();
+    const searchTerm = hasSearch ? search.trim() : '';
+    
+    // If organizationId is provided, return org-specific resources + global resources
     if (organizationId) {
-      where.organizationId = organizationId;
+      const queryBuilder = this.resourceRepository
+        .createQueryBuilder('resource')
+        .leftJoinAndSelect('resource.organization', 'organization')
+        .leftJoinAndSelect('resource.allocations', 'allocations')
+        .leftJoinAndSelect('allocations.event', 'event')
+        .where('resource.organizationId = :organizationId', { organizationId })
+        .orWhere('resource.isGlobal = :isGlobal', { isGlobal: true });
+      
+      if (hasSearch) {
+        queryBuilder.andWhere('(resource.name ILIKE :search OR resource.type::text ILIKE :search)', { search: `%${searchTerm}%` });
+      }
+      
+      return queryBuilder.orderBy('resource.name', 'ASC').getMany();
     }
+    
+    // If isGlobal filter is explicitly provided, use it
     if (isGlobal !== undefined) {
-      where.isGlobal = isGlobal;
+      if (hasSearch) {
+        return this.resourceRepository
+          .createQueryBuilder('resource')
+          .leftJoinAndSelect('resource.organization', 'organization')
+          .leftJoinAndSelect('resource.allocations', 'allocations')
+          .leftJoinAndSelect('allocations.event', 'event')
+          .where('resource.isGlobal = :isGlobal', { isGlobal })
+          .andWhere('(resource.name ILIKE :search OR resource.type::text ILIKE :search)', { search: `%${searchTerm}%` })
+          .orderBy('resource.name', 'ASC')
+          .getMany();
+      }
+      return this.resourceRepository.find({ 
+        where: { isGlobal }, 
+        relations: ['organization', 'allocations', 'allocations.event'] 
+      });
     }
+    
+    // No filters: return all resources
+    if (hasSearch) {
+      return this.resourceRepository
+        .createQueryBuilder('resource')
+        .leftJoinAndSelect('resource.organization', 'organization')
+        .leftJoinAndSelect('resource.allocations', 'allocations')
+        .leftJoinAndSelect('allocations.event', 'event')
+        .where('(resource.name ILIKE :search OR resource.type::text ILIKE :search)', { search: `%${searchTerm}%` })
+        .orderBy('resource.name', 'ASC')
+        .getMany();
+    }
+    
     return this.resourceRepository.find({ 
-      where, 
       relations: ['organization', 'allocations', 'allocations.event'] 
     });
   }
 
-  async findAllForOrgAdmin(organizationId: string): Promise<Resource[]> {
+  async findAllForOrgAdmin(organizationId: string, search?: string): Promise<Resource[]> {
     // Return org-specific resources + global resources
-    const resources = await this.resourceRepository
+    const queryBuilder = this.resourceRepository
       .createQueryBuilder('resource')
       .leftJoinAndSelect('resource.organization', 'organization')
       .leftJoinAndSelect('resource.allocations', 'allocations')
       .leftJoinAndSelect('allocations.event', 'event')
       .where('resource.organizationId = :organizationId', { organizationId })
-      .orWhere('resource.isGlobal = :isGlobal', { isGlobal: true })
-      .orderBy('resource.name', 'ASC')
-      .getMany();
+      .orWhere('resource.isGlobal = :isGlobal', { isGlobal: true });
     
-    return resources;
+    if (search && search.trim()) {
+      queryBuilder.andWhere('(resource.name ILIKE :search OR resource.type::text ILIKE :search)', { search: `%${search.trim()}%` });
+    }
+    
+    return queryBuilder.orderBy('resource.name', 'ASC').getMany();
   }
 
   async findOne(id: string): Promise<Resource> {

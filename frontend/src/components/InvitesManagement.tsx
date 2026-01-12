@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
+import { formatTableDate, formatEventDateTime } from '../utils/dateFormatter';
 import '../App.css';
 
 interface Event {
@@ -8,6 +10,7 @@ interface Event {
   title: string;
   startTime: string;
   endTime: string;
+  organizationId: string | null;
 }
 
 interface User {
@@ -34,7 +37,7 @@ interface Invite {
 
 function InvitesManagement() {
   const { user, isAdmin } = useAuth();
-  const [invites, setInvites] = useState<Invite[]>([]);
+  const [allInvites, setAllInvites] = useState<Invite[]>([]); // Store all invites from API
   const [events, setEvents] = useState<Event[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]); // All users from API
   const [availableUsers, setAvailableUsers] = useState<User[]>([]); // Filtered users for dropdown
@@ -46,7 +49,7 @@ function InvitesManagement() {
     userName: '',
   });
   const [showForm, setShowForm] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
+  const [, setSelectedEvent] = useState<Event | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('all');
 
   useEffect(() => {
@@ -67,20 +70,24 @@ function InvitesManagement() {
         api.get('/events', { params: isAdmin ? {} : (user?.organizationId ? { organizationId: user.organizationId } : {}) }),
         api.get('/users'),
       ]);
-      setInvites(invitesRes.data || []);
-      setEvents(eventsRes.data || []);
-      setAllUsers(usersRes.data || []);
+      const invitesData = invitesRes.data || [];
+      const eventsData = eventsRes.data || [];
+      const usersData = usersRes.data || [];
+      
+      setAllInvites(invitesData);
+      setEvents(eventsData);
+      setAllUsers(usersData);
       
       // Initial filter: org admins can see their org users + independent users
-      const filteredUsers = usersRes.data.filter((u: User) => 
+      const filteredUsers = usersData.filter((u: User) => 
         isAdmin || 
         u.organizationId === user?.organizationId || 
         u.organizationId === null // Independent users
       );
       setAvailableUsers(filteredUsers);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load data:', error);
-      alert('Failed to load data');
+      toast.error(error.response?.data?.message || 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -123,7 +130,7 @@ function InvitesManagement() {
     // For admins, organizationId is optional (backend will use event's organization)
     // For org admins, organizationId is required
     if (!isAdmin && !user?.organizationId) {
-      alert('You must belong to an organization to send invites');
+      toast.error('You must belong to an organization to send invites');
       return;
     }
 
@@ -143,7 +150,7 @@ function InvitesManagement() {
         inviteData.userEmail = formData.userEmail;
         inviteData.userName = formData.userName;
       } else {
-        alert('Please select a user or provide an email address');
+        toast.error('Please select a user or provide an email address');
         return;
       }
 
@@ -152,34 +159,10 @@ function InvitesManagement() {
       setSelectedEvent(null);
       setShowForm(false);
       loadData();
-      alert('Invite sent successfully!');
+      toast.success('Invite sent successfully!');
     } catch (error: any) {
       console.error('Failed to send invite:', error);
-      alert(error.response?.data?.message || 'Failed to send invite');
-    }
-  };
-
-  const handleAccept = async (inviteId: string, userId?: string) => {
-    try {
-      const params = userId ? { userId } : {};
-      await api.post(`/invites/${inviteId}/accept`, null, { params });
-      loadData();
-      alert('Invite accepted! User is now registered for the event.');
-    } catch (error: any) {
-      console.error('Failed to accept invite:', error);
-      alert(error.response?.data?.message || 'Failed to accept invite');
-    }
-  };
-
-  const handleDecline = async (inviteId: string, userId?: string) => {
-    if (!confirm('Are you sure you want to decline this invite?')) return;
-    try {
-      const params = userId ? { userId } : {};
-      await api.post(`/invites/${inviteId}/decline`, null, { params });
-      loadData();
-    } catch (error: any) {
-      console.error('Failed to decline invite:', error);
-      alert(error.response?.data?.message || 'Failed to decline invite');
+      toast.error(error.response?.data?.message || 'Failed to send invite');
     }
   };
 
@@ -188,29 +171,30 @@ function InvitesManagement() {
     
     // Admins can cancel any invite, org admins need organizationId
     if (!isAdmin && !user?.organizationId) {
-      alert('You must belong to an organization to cancel invites');
+      toast.error('You must belong to an organization to cancel invites');
       return;
     }
     
     try {
       await api.post(`/invites/${inviteId}/cancel`);
       loadData();
+      toast.success('Invite cancelled');
     } catch (error: any) {
       console.error('Failed to cancel invite:', error);
-      alert(error.response?.data?.message || 'Failed to cancel invite');
+      toast.error(error.response?.data?.message || 'Failed to cancel invite');
     }
   };
 
-  const deleteInvite = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this invite?')) return;
-    try {
-      await api.delete(`/invites/${id}`);
-      loadData();
-    } catch (error) {
-      console.error('Failed to delete invite:', error);
-      alert('Failed to delete invite');
+
+  // Client-side filtering with useMemo for performance
+  // Must be called before any early returns (React hooks rule)
+  const filteredInvites = useMemo(() => {
+    // Apply status filter only
+    if (filterStatus === 'all') {
+      return allInvites;
     }
-  };
+    return allInvites.filter((invite: Invite) => invite.status === filterStatus);
+  }, [allInvites, filterStatus]);
 
   // Only block regular users without organization
   if (!isAdmin && !user?.organizationId) {
@@ -220,10 +204,6 @@ function InvitesManagement() {
   if (loading) {
     return <div className="card">Loading invites...</div>;
   }
-
-  const filteredInvites = filterStatus === 'all' 
-    ? invites 
-    : invites.filter(invite => invite.status === filterStatus);
 
   return (
     <div>
@@ -247,7 +227,7 @@ function InvitesManagement() {
                 <option value="">Select Event</option>
                 {events.map((event) => (
                   <option key={event.id} value={event.id}>
-                    {event.title} ({new Date(event.startTime).toLocaleString()})
+                    {event.title} ({formatEventDateTime(event.startTime)})
                   </option>
                 ))}
               </select>
@@ -299,9 +279,23 @@ function InvitesManagement() {
           </form>
         )}
 
+        {/* Filter by Status */}
         <div style={{ marginBottom: '1rem' }}>
           <label style={{ marginRight: '1rem' }}>Filter by Status:</label>
-          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+          <select 
+            value={filterStatus} 
+            onChange={(e) => setFilterStatus(e.target.value)}
+            style={{
+              padding: '0.5rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--gray-300)',
+              backgroundColor: 'white',
+              fontSize: '0.875rem',
+              color: 'var(--gray-900)',
+              cursor: 'pointer',
+              minWidth: '180px'
+            }}
+          >
             <option value="all">All</option>
             <option value="pending">Pending</option>
             <option value="accepted">Accepted</option>
@@ -353,10 +347,10 @@ function InvitesManagement() {
                       {invite.status.charAt(0).toUpperCase() + invite.status.slice(1)}
                     </span>
                   </td>
-                  <td>{new Date(invite.createdAt).toLocaleString()}</td>
+                  <td>{formatTableDate(invite.createdAt)}</td>
                   <td>
                     {invite.respondedAt 
-                      ? new Date(invite.respondedAt).toLocaleString()
+                      ? formatTableDate(invite.respondedAt)
                       : '-'}
                   </td>
                   <td>

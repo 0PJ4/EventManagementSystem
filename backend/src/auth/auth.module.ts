@@ -14,9 +14,19 @@ import { RolesGuard } from './guards/roles.guard';
   imports: [
     TypeOrmModule.forFeature([User, Organization]),
     PassportModule,
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-      signOptions: { expiresIn: '7d' },
+    JwtModule.registerAsync({
+      useFactory: () => {
+        const jwtSecret = process.env.JWT_SECRET;
+        if (!jwtSecret) {
+          throw new Error(
+            'JWT_SECRET environment variable is required. Please set it in your .env file.'
+          );
+        }
+        return {
+          secret: jwtSecret,
+          signOptions: { expiresIn: '7d' },
+        };
+      },
     }),
   ],
   controllers: [AuthController],

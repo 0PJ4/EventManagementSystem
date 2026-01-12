@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, ILike } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User, UserRole } from '../entities/user.entity';
 import { Organization } from '../entities/organization.entity';
@@ -93,7 +93,26 @@ export class UsersService {
     return regex.test(email);
   }
 
-  async findAll(organizationId?: string): Promise<User[]> {
+  async findAll(organizationId?: string, search?: string): Promise<User[]> {
+    if (search && search.trim()) {
+      if (organizationId) {
+        return this.userRepository.find({
+          where: [
+            { organizationId, name: ILike(`%${search.trim()}%`) },
+            { organizationId, email: ILike(`%${search.trim()}%`) },
+          ],
+          relations: ['organization'],
+        });
+      }
+      return this.userRepository.find({
+        where: [
+          { name: ILike(`%${search.trim()}%`) },
+          { email: ILike(`%${search.trim()}%`) },
+        ],
+        relations: ['organization'],
+      });
+    }
+    
     if (organizationId) {
       return this.userRepository.find({ 
         where: { organizationId },

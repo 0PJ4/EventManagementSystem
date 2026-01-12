@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Check } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Check, Index } from 'typeorm';
 import { Organization } from './organization.entity';
 import { ResourceAllocation } from './resource-allocation.entity';
 
@@ -25,6 +25,7 @@ export class Resource {
   type: ResourceType;
 
   @Column({ type: 'uuid', nullable: true })
+  @Index()
   organizationId: string | null;
 
   @ManyToOne(() => Organization, organization => organization.resources, {

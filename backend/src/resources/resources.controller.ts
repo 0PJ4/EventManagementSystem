@@ -34,18 +34,20 @@ export class ResourcesController {
   findAll(
     @Query('organizationId') organizationId?: string,
     @Query('isGlobal') isGlobal?: string,
+    @Query('search') search?: string,
     @Request() req?,
   ) {
     // Org admins should see: their own org resources + global resources
     // Admins see: all resources
     if (req.user.role === UserRole.ORG && !organizationId && !isGlobal) {
       // If no specific filter, show org resources + global resources
-      return this.resourcesService.findAllForOrgAdmin(req.user.organizationId);
+      return this.resourcesService.findAllForOrgAdmin(req.user.organizationId, search);
     }
     
     return this.resourcesService.findAll(
       organizationId,
       isGlobal === 'true' ? true : isGlobal === 'false' ? false : undefined,
+      search,
     );
   }
 

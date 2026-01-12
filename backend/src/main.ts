@@ -7,6 +7,17 @@ import { AppModule } from './app.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 
 async function bootstrap() {
+  // Validate required environment variables
+  if (!process.env.JWT_SECRET) {
+    console.error('❌ ERROR: JWT_SECRET environment variable is required!');
+    console.error('Please set JWT_SECRET in your .env file.');
+    process.exit(1);
+  }
+
+  // Set timezone to Eastern Time (America/New_York)
+  // This ensures all date/time operations use EST/EDT
+  process.env.TZ = 'America/New_York';
+
   const app = await NestFactory.create(AppModule);
   
   app.useGlobalPipes(new ValidationPipe({

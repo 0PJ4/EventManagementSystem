@@ -49,6 +49,7 @@ export class Event {
   organization: Organization;
 
   @Column({ type: 'uuid', nullable: true })
+  @Index()
   parentEventId: string | null;
 
   @ManyToOne(() => Event, event => event.childEvents, { nullable: true, onDelete: 'CASCADE' })

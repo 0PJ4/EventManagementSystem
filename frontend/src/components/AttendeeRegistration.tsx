@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import { formatTableDate } from '../utils/dateFormatter';
 import '../App.css';
 
 interface Event {
@@ -158,7 +159,7 @@ function AttendeeRegistration() {
                 <option value="">Select Event</option>
                 {events.map((event) => (
                   <option key={event.id} value={event.id}>
-                    {event.title} ({new Date(event.startTime).toLocaleString()})
+                    {event.title} ({formatTableDate(event.startTime)})
                   </option>
                 ))}
               </select>
@@ -238,11 +239,11 @@ function AttendeeRegistration() {
                       {attendance.userId ? 'User' : 'External'}
                     </span>
                   </td>
-                  <td>{new Date(attendance.registeredAt).toLocaleString()}</td>
+                  <td>{formatTableDate(attendance.registeredAt)}</td>
                   <td>
                     {attendance.checkedInAt ? (
                       <span className="badge badge-success">
-                        {new Date(attendance.checkedInAt).toLocaleString()}
+                        {formatTableDate(attendance.checkedInAt)}
                       </span>
                     ) : (
                       <button
@@ -254,12 +255,35 @@ function AttendeeRegistration() {
                     )}
                   </td>
                   <td>
-                    <button
-                      onClick={() => deleteAttendance(attendance.id)}
-                      className="btn btn-small btn-danger"
-                    >
-                      Remove
-                    </button>
+                    {(() => {
+                      // Check if 15 minutes have passed since event start
+                      const eventStartTime = attendance.event ? new Date(attendance.event.startTime) : null;
+                      const now = new Date();
+                      const canDeregister = eventStartTime 
+                        ? now < new Date(eventStartTime.getTime() + 15 * 60 * 1000) // 15 minutes after start
+                        : true; // If no event data, allow (backend will validate)
+                      
+                      if (canDeregister) {
+                        return (
+                          <button
+                            onClick={() => deleteAttendance(attendance.id)}
+                            className="btn btn-small btn-danger"
+                          >
+                            Remove
+                          </button>
+                        );
+                      } else {
+                        return (
+                          <button
+                            disabled
+                            className="btn btn-small btn-secondary"
+                            title="Cannot remove attendance 15 minutes after event starts"
+                          >
+                            Locked
+                          </button>
+                        );
+                      }
+                    })()}
                   </td>
                 </tr>
               ))

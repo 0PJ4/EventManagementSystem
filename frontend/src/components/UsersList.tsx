@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import '../App.css';
@@ -23,7 +23,6 @@ interface Organization {
 
 function UsersList() {
   const { user, isAdmin, isOrg } = useAuth();
-  const [users, setUsers] = useState<User[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
@@ -35,8 +34,10 @@ function UsersList() {
   });
   const [showForm, setShowForm] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [allUsers, setAllUsers] = useState<User[]>([]); // Store all users from API
   const [filterRole, setFilterRole] = useState<string>('all');
   const [filterOrg, setFilterOrg] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState<string>('');
 
   useEffect(() => {
     loadData();
@@ -44,18 +45,49 @@ function UsersList() {
 
   const loadData = async () => {
     try {
+      setLoading(true);
       const [usersRes, orgsRes] = await Promise.all([
         api.get('/users'),
         api.get('/organizations'),
       ]);
-      setUsers(usersRes.data);
-      setOrganizations(orgsRes.data);
+      setAllUsers(usersRes.data || []);
+      setOrganizations(orgsRes.data || []);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
       setLoading(false);
     }
   };
+
+  // Client-side filtering with useMemo for performance
+  const users = useMemo(() => {
+    let filtered = [...allUsers];
+    
+    // Apply search filter (instant, no API call)
+    if (searchTerm.trim()) {
+      const searchLower = searchTerm.toLowerCase().trim();
+      filtered = filtered.filter((u: User) => 
+        u.name?.toLowerCase().includes(searchLower) ||
+        u.email?.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    // Apply role filter
+    if (filterRole !== 'all') {
+      filtered = filtered.filter((u: User) => u.role === filterRole);
+    }
+    
+    // Apply organization filter
+    if (filterOrg !== 'all') {
+      if (filterOrg === 'independent') {
+        filtered = filtered.filter((u: User) => !u.organizationId);
+      } else {
+        filtered = filtered.filter((u: User) => u.organizationId === filterOrg);
+      }
+    }
+    
+    return filtered;
+  }, [allUsers, searchTerm, filterRole, filterOrg]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -265,6 +297,60 @@ function UsersList() {
           </form>
         </div>
       )}
+
+      {/* Search Input */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <div style={{ position: 'relative', width: '100%' }}>
+          <svg
+            style={{
+              position: 'absolute',
+              left: '0.875rem',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '20px',
+              height: '20px',
+              color: 'var(--gray-400)',
+              pointerEvents: 'none',
+              zIndex: 1
+            }}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="11" cy="11" r="8"></circle>
+            <path d="m21 21-4.35-4.35"></path>
+          </svg>
+          <input
+            type="text"
+            placeholder="Search users by name or email..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '0.75rem 1rem 0.75rem 2.75rem',
+              fontSize: '0.9375rem',
+              lineHeight: '1.5',
+              color: 'var(--gray-900)',
+              background: 'white',
+              border: '1px solid var(--gray-300)',
+              borderRadius: 'var(--radius-md)',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = 'var(--primary-500)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'var(--gray-300)';
+              e.target.style.boxShadow = '0 1px 2px 0 rgba(0, 0, 0, 0.05)';
+            }}
+          />
+        </div>
+      </div>
 
       <div style={{ marginBottom: '1.5rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
         <div className="form-group" style={{ marginBottom: 0, flex: '1 1 200px' }}>

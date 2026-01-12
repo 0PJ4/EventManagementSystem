@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import '../App.css';
 
 interface PublicInviteData {
@@ -72,7 +73,7 @@ function PublicInviteResponse() {
       await loadInvite();
     } catch (error: any) {
       console.error('Failed to accept invite:', error);
-      alert(error.response?.data?.message || 'Failed to accept invite');
+      toast.error(error.response?.data?.message || 'Failed to accept invite');
       setActionStatus('idle');
     }
   };
@@ -83,9 +84,10 @@ function PublicInviteResponse() {
       setActionStatus('declining');
       await api.post(`/invites/public/${token}/decline`);
       setActionStatus('declined');
+      toast.success('Invite declined');
     } catch (error: any) {
       console.error('Failed to decline invite:', error);
-      alert(error.response?.data?.message || 'Failed to decline invite');
+      toast.error(error.response?.data?.message || 'Failed to decline invite');
       setActionStatus('idle');
     }
   };
@@ -94,14 +96,14 @@ function PublicInviteResponse() {
     if (!attendanceId) return;
     try {
       await api.post(`/attendances/public/${attendanceId}/checkin`);
-      alert('Successfully checked in!');
+      toast.success('Successfully checked in!');
       // Optionally reload to show updated status
       if (token) {
         loadInvite();
       }
     } catch (error: any) {
       console.error('Failed to check in:', error);
-      alert(error.response?.data?.message || 'Failed to check in');
+      toast.error(error.response?.data?.message || 'Failed to check in');
     }
   };
 

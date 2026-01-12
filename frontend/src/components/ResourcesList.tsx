@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import '../App.css';
@@ -26,7 +26,6 @@ interface Resource {
 
 function ResourcesList() {
   const { user, isAdmin, isOrg } = useAuth();
-  const [resources, setResources] = useState<Resource[]>([]);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
     name: '',
@@ -36,8 +35,10 @@ function ResourcesList() {
     maxConcurrentUsage: null as number | null,
     isGlobal: false,
   });
+  const [allResources, setAllResources] = useState<Resource[]>([]); // Store all resources from API
   const [showForm, setShowForm] = useState(false);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
+  const [searchTerm, setSearchTerm] = useState<string>('');
 
   useEffect(() => {
     if (user) {
@@ -47,9 +48,10 @@ function ResourcesList() {
 
   const loadResources = async () => {
     try {
+      setLoading(true);
       // Backend will automatically filter for org admins (own org + global resources)
       const response = await api.get('/resources');
-      setResources(response.data);
+      setAllResources(response.data || []);
     } catch (error) {
       console.error('Failed to load resources:', error);
       alert('Failed to load resources');
@@ -57,6 +59,19 @@ function ResourcesList() {
       setLoading(false);
     }
   };
+
+  // Client-side filtering with useMemo for performance
+  const resources = useMemo(() => {
+    if (!searchTerm.trim()) {
+      return allResources;
+    }
+    
+    const searchLower = searchTerm.toLowerCase().trim();
+    return allResources.filter((r: Resource) => 
+      r.name?.toLowerCase().includes(searchLower) ||
+      r.type?.toLowerCase().includes(searchLower)
+    );
+  }, [allResources, searchTerm]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -149,6 +164,60 @@ function ResourcesList() {
         <button onClick={() => showForm ? handleCancelEdit() : setShowForm(true)} className="btn btn-primary">
           {showForm ? 'Cancel' : '+ Create Resource'}
         </button>
+      </div>
+
+      {/* Search Input */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <div style={{ position: 'relative', width: '100%' }}>
+          <svg
+            style={{
+              position: 'absolute',
+              left: '0.875rem',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '20px',
+              height: '20px',
+              color: 'var(--gray-400)',
+              pointerEvents: 'none',
+              zIndex: 1
+            }}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="11" cy="11" r="8"></circle>
+            <path d="m21 21-4.35-4.35"></path>
+          </svg>
+          <input
+            type="text"
+            placeholder="Search resources by name or type..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '0.75rem 1rem 0.75rem 2.75rem',
+              fontSize: '0.9375rem',
+              lineHeight: '1.5',
+              color: 'var(--gray-900)',
+              background: 'white',
+              border: '1px solid var(--gray-300)',
+              borderRadius: 'var(--radius-md)',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = 'var(--primary-500)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'var(--gray-300)';
+              e.target.style.boxShadow = '0 1px 2px 0 rgba(0, 0, 0, 0.05)';
+            }}
+          />
+        </div>
       </div>
 
       {showForm && (

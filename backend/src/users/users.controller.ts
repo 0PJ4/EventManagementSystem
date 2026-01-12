@@ -20,13 +20,17 @@ export class UsersController {
   }
 
   @Get()
-  findAll(@Query('organizationId') organizationId?: string, @Request() req?) {
+  findAll(
+    @Query('organizationId') organizationId?: string,
+    @Query('search') search?: string,
+    @Request() req?,
+  ) {
     // Org admins can only see users from their organization
     if (req.user.role === UserRole.ORG) {
-      return this.usersService.findAll(req.user.organizationId);
+      return this.usersService.findAll(req.user.organizationId, search);
     }
     // Admins can see all users or filter by organizationId
-    return this.usersService.findAll(organizationId);
+    return this.usersService.findAll(organizationId, search);
   }
 
   @Get(':id')

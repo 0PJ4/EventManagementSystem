@@ -19,8 +19,10 @@ export enum InviteStatus {
 }
 
 @Entity('invites')
-@Index(['eventId', 'userEmail'], { unique: true, where: '"userId" IS NULL' })
-@Index(['eventId', 'userId'], { unique: true, where: '"userId" IS NOT NULL' })
+// Unique constraint: Only one active invite (PENDING/ACCEPTED/CANCELLED) per event+email
+// Multiple DECLINED invites are allowed for history tracking
+@Index(['eventId', 'userEmail'], { unique: true, where: '"userId" IS NULL AND "status" != \'declined\'' })
+@Index(['eventId', 'userId'], { unique: true, where: '"userId" IS NOT NULL AND "status" != \'declined\'' })
 @Check(`("userId" IS NOT NULL AND "userEmail" IS NULL) OR ("userId" IS NULL AND "userEmail" IS NOT NULL)`)
 export class Invite {
   @PrimaryGeneratedColumn('uuid')
@@ -47,6 +49,7 @@ export class Invite {
   userName: string | null;
 
   @Column({ type: 'uuid' })
+  @Index()
   invitedByOrganizationId: string;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE' })
@@ -54,6 +57,7 @@ export class Invite {
   invitedByOrganization: Organization;
 
   @Column({ type: 'uuid', nullable: true })
+  @Index()
   invitedByUserId: string | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })

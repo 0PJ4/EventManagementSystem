@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan, MoreThan, Or } from 'typeorm';
+import { Repository, Between, LessThan, MoreThan, Or, ILike } from 'typeorm';
 import { Event } from '../entities/event.entity';
 import { Attendance } from '../entities/attendance.entity';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -47,77 +47,177 @@ export class EventsService {
     return this.eventRepository.save(event);
   }
 
-  async findAll(organizationId?: string, userRole?: string, userOrgId?: string, userId?: string): Promise<Event[]> {
-    let events: Event[];
+  async findAll(organizationId?: string, userRole?: string, userOrgId?: string, userId?: string, search?: string): Promise<Event[]> {
+    const hasSearch = search && search.trim();
+    const searchTerm = hasSearch ? search.trim() : '';
     
     // Admin can see all events (including drafts)
     if (userRole === UserRole.ADMIN) {
       if (organizationId) {
-        events = await this.eventRepository.find({
-          where: { organizationId },
-          relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
-          order: { startTime: 'ASC' },
-        });
+        if (hasSearch) {
+          const events = await this.eventRepository
+            .createQueryBuilder('event')
+            .leftJoinAndSelect('event.organization', 'organization')
+            .leftJoinAndSelect('event.parentEvent', 'parentEvent')
+            .leftJoinAndSelect('event.childEvents', 'childEvents')
+            .leftJoinAndSelect('event.resourceAllocations', 'resourceAllocations')
+            .where('event.organizationId = :organizationId', { organizationId })
+            .andWhere('(event.title ILIKE :search OR event.description ILIKE :search)', { search: `%${searchTerm}%` })
+            .orderBy('event.startTime', 'ASC')
+            .getMany();
+          
+          events.forEach((event) => {
+            (event as any).resourceCount = event.resourceAllocations?.length || 0;
+          });
+          return events;
+        } else {
+          const events = await this.eventRepository.find({
+            where: { organizationId },
+            relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
+            order: { startTime: 'ASC' },
+          });
+          events.forEach((event) => {
+            (event as any).resourceCount = event.resourceAllocations?.length || 0;
+          });
+          return events;
+        }
       } else {
-        events = await this.eventRepository.find({
-          relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
-          order: { startTime: 'ASC' },
-        });
+        if (hasSearch) {
+          const events = await this.eventRepository
+            .createQueryBuilder('event')
+            .leftJoinAndSelect('event.organization', 'organization')
+            .leftJoinAndSelect('event.parentEvent', 'parentEvent')
+            .leftJoinAndSelect('event.childEvents', 'childEvents')
+            .leftJoinAndSelect('event.resourceAllocations', 'resourceAllocations')
+            .where('(event.title ILIKE :search OR event.description ILIKE :search)', { search: `%${searchTerm}%` })
+            .orderBy('event.startTime', 'ASC')
+            .getMany();
+          
+          events.forEach((event) => {
+            (event as any).resourceCount = event.resourceAllocations?.length || 0;
+          });
+          return events;
+        } else {
+          const events = await this.eventRepository.find({
+            relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
+            order: { startTime: 'ASC' },
+          });
+          events.forEach((event) => {
+            (event as any).resourceCount = event.resourceAllocations?.length || 0;
+          });
+          return events;
+        }
       }
     }
     // Org admin: own org events (including drafts) OR published events with external attendees
     else if (userRole === UserRole.ORG && userOrgId) {
       // If organizationId filter is provided, return ONLY events from that organization
       if (organizationId) {
-        events = await this.eventRepository.find({
-          where: { organizationId },
-          relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
-          order: { startTime: 'ASC' },
-        });
+        if (hasSearch) {
+          const events = await this.eventRepository
+            .createQueryBuilder('event')
+            .leftJoinAndSelect('event.organization', 'organization')
+            .leftJoinAndSelect('event.parentEvent', 'parentEvent')
+            .leftJoinAndSelect('event.childEvents', 'childEvents')
+            .leftJoinAndSelect('event.resourceAllocations', 'resourceAllocations')
+            .where('event.organizationId = :organizationId', { organizationId })
+            .andWhere('(event.title ILIKE :search OR event.description ILIKE :search)', { search: `%${searchTerm}%` })
+            .orderBy('event.startTime', 'ASC')
+            .getMany();
+          
+          events.forEach((event) => {
+            (event as any).resourceCount = event.resourceAllocations?.length || 0;
+          });
+          return events;
+        } else {
+          const events = await this.eventRepository.find({
+            where: { organizationId },
+            relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
+            order: { startTime: 'ASC' },
+          });
+          events.forEach((event) => {
+            (event as any).resourceCount = event.resourceAllocations?.length || 0;
+          });
+          return events;
+        }
       } else {
         // No filter: return own org events + published external events
-        const whereConditions: any[] = [];
+        if (hasSearch) {
+          const events = await this.eventRepository
+            .createQueryBuilder('event')
+            .leftJoinAndSelect('event.organization', 'organization')
+            .leftJoinAndSelect('event.parentEvent', 'parentEvent')
+            .leftJoinAndSelect('event.childEvents', 'childEvents')
+            .leftJoinAndSelect('event.resourceAllocations', 'resourceAllocations')
+            .where(
+              '(event.organizationId = :userOrgId OR (event.allowExternalAttendees = true AND event.status = :published))',
+              { userOrgId, published: 'published' }
+            )
+            .andWhere('(event.title ILIKE :search OR event.description ILIKE :search)', { search: `%${searchTerm}%` })
+            .orderBy('event.startTime', 'ASC')
+            .getMany();
+          
+          events.forEach((event) => {
+            (event as any).resourceCount = event.resourceAllocations?.length || 0;
+          });
+          return events;
+        } else {
+          const whereConditions: any[] = [
+            { organizationId: userOrgId },
+            { allowExternalAttendees: true, status: 'published' }
+          ];
+          const events = await this.eventRepository.find({
+            where: whereConditions,
+            relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
+            order: { startTime: 'ASC' },
+          });
+          events.forEach((event) => {
+            (event as any).resourceCount = event.resourceAllocations?.length || 0;
+          });
+          return events;
+        }
+      }
+    } else {
+      // Regular users: published events from their org OR published events with external attendees
+      if (hasSearch) {
+        const queryBuilder = this.eventRepository
+          .createQueryBuilder('event')
+          .leftJoinAndSelect('event.organization', 'organization')
+          .leftJoinAndSelect('event.parentEvent', 'parentEvent')
+          .leftJoinAndSelect('event.childEvents', 'childEvents')
+          .leftJoinAndSelect('event.resourceAllocations', 'resourceAllocations')
+          .where('(event.allowExternalAttendees = true AND event.status = :published)', { published: 'published' });
         
-        // Own organization events (all statuses)
-        whereConditions.push({ organizationId: userOrgId });
+        if (userOrgId) {
+          queryBuilder.orWhere('(event.organizationId = :userOrgId AND event.status = :published)', { userOrgId, published: 'published' });
+        }
         
-        // Published events that allow external attendees (from any org)
-        whereConditions.push({ 
-          allowExternalAttendees: true, 
-          status: 'published' 
+        queryBuilder.andWhere('(event.title ILIKE :search OR event.description ILIKE :search)', { search: `%${searchTerm}%` });
+        
+        const events = await queryBuilder.orderBy('event.startTime', 'ASC').getMany();
+        
+        events.forEach((event) => {
+          (event as any).resourceCount = event.resourceAllocations?.length || 0;
         });
+        return events;
+      } else {
+        const whereConditions: any[] = [];
+        if (userOrgId) {
+          whereConditions.push({ organizationId: userOrgId, status: 'published' });
+        }
+        whereConditions.push({ allowExternalAttendees: true, status: 'published' });
         
-        events = await this.eventRepository.find({
+        const events = await this.eventRepository.find({
           where: whereConditions,
           relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
           order: { startTime: 'ASC' },
         });
+        events.forEach((event) => {
+          (event as any).resourceCount = event.resourceAllocations?.length || 0;
+        });
+        return events;
       }
-    } else {
-      // Regular users: published events from their org OR published events with external attendees
-      const whereConditions: any[] = [];
-      
-      if (userOrgId) {
-        // Published events from user's organization
-        whereConditions.push({ organizationId: userOrgId, status: 'published' });
-      }
-      
-      // Published events that allow external attendees (everyone can see and register)
-      whereConditions.push({ allowExternalAttendees: true, status: 'published' });
-      
-      events = await this.eventRepository.find({
-        where: whereConditions,
-        relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
-        order: { startTime: 'ASC' },
-      });
     }
-
-    // Add resource count for each event
-    for (const event of events) {
-      (event as any).resourceCount = event.resourceAllocations?.length || 0;
-    }
-
-    return events;
   }
 
   async findOne(id: string): Promise<Event> {

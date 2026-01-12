@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Brackets } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { MailerService } from '@nestjs-modules/mailer';
 import { Invite, InviteStatus } from '../entities/invite.entity';
@@ -127,31 +127,80 @@ export class InvitesService {
       }
     }
 
-    // Check if invite already exists
-    const existingInvite = await this.inviteRepository.findOne({
+    // Check if an active (non-declined) invite already exists
+    // We allow multiple DECLINED invites for history, but only one active invite
+    const existingActiveInvite = await this.inviteRepository.findOne({
       where: createInviteDto.userId
-        ? { eventId: createInviteDto.eventId, userId: createInviteDto.userId }
-        : { eventId: createInviteDto.eventId, userEmail: createInviteDto.userEmail },
+        ? { 
+            eventId: createInviteDto.eventId, 
+            userId: createInviteDto.userId,
+            status: InviteStatus.PENDING // Check for pending invites
+          }
+        : { 
+            eventId: createInviteDto.eventId, 
+            userEmail: createInviteDto.userEmail,
+            status: InviteStatus.PENDING // Check for pending invites
+          },
     });
 
-    if (existingInvite) {
-      if (existingInvite.status === InviteStatus.PENDING) {
-        throw new ConflictException('Invite already sent and is pending');
-      }
-      // Allow resending invite if user previously accepted but is no longer registered
-      // The check above for isAlreadyRegistered ensures user is not currently registered
-      if (existingInvite.status === InviteStatus.ACCEPTED) {
-        // User accepted but unregistered - reset invite to PENDING to allow resending
-        existingInvite.status = InviteStatus.PENDING;
-        existingInvite.respondedAt = null;
-        return this.inviteRepository.save(existingInvite);
-      }
-      // If status is DECLINED or CANCELLED, allow creating a new invite (will be handled below)
+    if (existingActiveInvite) {
+      throw new ConflictException('Invite already sent and is pending');
     }
 
+    // Check if user previously accepted but is no longer registered
+    // Allow resending invite in this case
+    if (createInviteDto.userId) {
+      const existingAcceptedInvite = await this.inviteRepository.findOne({
+        where: { 
+          eventId: createInviteDto.eventId, 
+          userId: createInviteDto.userId,
+          status: InviteStatus.ACCEPTED
+        },
+      });
+
+      if (existingAcceptedInvite) {
+        // User accepted but unregistered - reset invite to PENDING to allow resending
+        existingAcceptedInvite.status = InviteStatus.PENDING;
+        existingAcceptedInvite.respondedAt = null;
+        // Regenerate token for external invites (if applicable)
+        if (!createInviteDto.userId && createInviteDto.userEmail) {
+          existingAcceptedInvite.token = randomUUID();
+        }
+        const updatedInvite = await this.inviteRepository.save(existingAcceptedInvite);
+        
+        // Send email notification for resent invite
+        await this.sendInviteEmailNotification(updatedInvite, event, createInviteDto.userId, createInviteDto.userEmail, createInviteDto.userName);
+        return updatedInvite;
+      }
+    }
+
+    // For DECLINED invites: Create a NEW invite record
+    // The declined invite stays in the database for history tracking
+    // Multiple declined invites are allowed, but only one active (PENDING/ACCEPTED/CANCELLED) invite
+    
+    // For CANCELLED invites: Delete the old one and create a new one
+    const existingCancelledInvite = await this.inviteRepository.findOne({
+      where: createInviteDto.userId
+        ? { eventId: createInviteDto.eventId, userId: createInviteDto.userId, status: InviteStatus.CANCELLED }
+        : { eventId: createInviteDto.eventId, userEmail: createInviteDto.userEmail, status: InviteStatus.CANCELLED },
+    });
+    
+    if (existingCancelledInvite) {
+      await this.inviteRepository.remove(existingCancelledInvite);
+      // Continue to create new invite below
+    }
+
+    // Create new invite record
+    // Ensure all fields are properly set, especially userName for external invites
     const invite = this.inviteRepository.create({
-      ...createInviteDto,
+      eventId: createInviteDto.eventId,
+      userId: createInviteDto.userId || null,
+      userEmail: createInviteDto.userEmail || null,
+      userName: createInviteDto.userName || null, // Ensure name is recorded properly for external invites
       invitedByOrganizationId: effectiveOrganizationId,
+      invitedByUserId: createInviteDto.invitedByUserId || null,
+      status: InviteStatus.PENDING,
+      respondedAt: null,
     });
     
     // Generate token for external invites (userEmail without userId)
@@ -162,100 +211,47 @@ export class InvitesService {
     const savedInvite = await this.inviteRepository.save(invite);
     
     // Send email notification
-    try {
-      let recipientEmail: string;
-      let recipientName: string;
-      
-      if (createInviteDto.userId) {
-        const user = await this.userRepository.findOne({
-          where: { id: createInviteDto.userId },
-        });
-        if (user) {
-          recipientEmail = user.email;
-          recipientName = user.name;
-        }
-      } else if (createInviteDto.userEmail) {
-        recipientEmail = createInviteDto.userEmail;
-        recipientName = createInviteDto.userName || 'Guest';
-      }
-      
-      if (recipientEmail) {
-        // Build the invite link
-        let inviteLink: string;
-        if (savedInvite.token) {
-          // External invite with token
-          inviteLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/invites/${savedInvite.token}`;
-        } else {
-          // Internal invite - user needs to log in first
-          inviteLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/my-invites`;
-        }
-        
-        await this.mailerService.sendMail({
-          to: recipientEmail,
-          subject: `You have been invited to ${event.title}`,
-          html: `
-            <h2>Event Invitation</h2>
-            <p>Hello ${recipientName},</p>
-            <p>You have been invited to attend: <strong>${event.title}</strong></p>
-            <p><strong>Event Details:</strong></p>
-            <ul>
-              <li>Start Time: ${new Date(event.startTime).toLocaleString()}</li>
-              <li>End Time: ${new Date(event.endTime).toLocaleString()}</li>
-            </ul>
-            ${event.description ? `<p>${event.description}</p>` : ''}
-            <p>
-              <a href="${inviteLink}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">
-                ${savedInvite.token ? 'Accept Invitation' : 'View Invitation'}
-              </a>
-            </p>
-            <p>If the button doesn't work, copy and paste this link into your browser:</p>
-            <p>${inviteLink}</p>
-          `,
-          text: `
-            Event Invitation
-            
-            Hello ${recipientName},
-            
-            You have been invited to attend: ${event.title}
-            
-            Event Details:
-            - Start Time: ${new Date(event.startTime).toLocaleString()}
-            - End Time: ${new Date(event.endTime).toLocaleString()}
-            
-            ${event.description ? `Description: ${event.description}` : ''}
-            
-            Click here to accept: ${inviteLink}
-          `,
-        });
-      }
-    } catch (error) {
-      // Log error but don't fail the invite creation
-      console.error('Failed to send invite email:', error);
-    }
+    await this.sendInviteEmailNotification(savedInvite, event, createInviteDto.userId, createInviteDto.userEmail, createInviteDto.userName);
     
     return savedInvite;
   }
 
-  async findAll(eventId?: string, organizationId?: string, userId?: string): Promise<Invite[]> {
-    const where: any = {};
+  async findAll(eventId?: string, organizationId?: string, userId?: string, search?: string): Promise<Invite[]> {
+    const queryBuilder = this.inviteRepository
+      .createQueryBuilder('invite')
+      .leftJoinAndSelect('invite.event', 'event')
+      .leftJoinAndSelect('invite.user', 'user')
+      .leftJoinAndSelect('invite.invitedByOrganization', 'invitedByOrganization')
+      .leftJoinAndSelect('invite.invitedByUser', 'invitedByUser');
     
     if (eventId) {
-      where.eventId = eventId;
+      queryBuilder.andWhere('invite.eventId = :eventId', { eventId });
     }
     
     if (organizationId) {
-      where.invitedByOrganizationId = organizationId;
+      queryBuilder.andWhere('invite.invitedByOrganizationId = :organizationId', { organizationId });
     }
     
     if (userId) {
-      where.userId = userId;
+      queryBuilder.andWhere('invite.userId = :userId', { userId });
     }
 
-    return this.inviteRepository.find({
-      where,
-      relations: ['event', 'user', 'invitedByOrganization', 'invitedByUser'],
-      order: { createdAt: 'DESC' },
-    });
+    // Apply search filter (event.title OR user.name OR user.email OR userEmail OR userName)
+    if (search && search.trim()) {
+      queryBuilder.andWhere(
+        new Brackets((qb) => {
+          qb.where('event.title ILIKE :search', { search: `%${search.trim()}%` })
+            .orWhere('user.name ILIKE :search', { search: `%${search.trim()}%` })
+            .orWhere('user.email ILIKE :search', { search: `%${search.trim()}%` })
+            .orWhere('invite.userEmail ILIKE :search', { search: `%${search.trim()}%` })
+            .orWhere('invite.userName ILIKE :search', { search: `%${search.trim()}%` });
+        })
+      );
+    }
+
+    return queryBuilder
+      .orderBy('invite.createdAt', 'DESC')
+      .getMany();
   }
 
   async findOne(id: string): Promise<Invite> {
@@ -465,5 +461,88 @@ export class InvitesService {
     invite.respondedAt = new Date();
 
     return this.inviteRepository.save(invite);
+  }
+
+  /**
+   * Helper method to send invite email notifications
+   * Extracted to avoid code duplication when resending invites
+   */
+  private async sendInviteEmailNotification(
+    invite: Invite,
+    event: Event,
+    userId?: string,
+    userEmail?: string,
+    userName?: string
+  ): Promise<void> {
+    try {
+      let recipientEmail: string;
+      let recipientName: string;
+      
+      if (userId) {
+        const user = await this.userRepository.findOne({
+          where: { id: userId },
+        });
+        if (user) {
+          recipientEmail = user.email;
+          recipientName = user.name;
+        }
+      } else if (userEmail) {
+        recipientEmail = userEmail;
+        recipientName = userName || 'Guest';
+      }
+      
+      if (recipientEmail) {
+        // Build the invite link
+        let inviteLink: string;
+        if (invite.token) {
+          // External invite with token
+          inviteLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/invites/${invite.token}`;
+        } else {
+          // Internal invite - user needs to log in first
+          inviteLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/my-invites`;
+        }
+        
+        await this.mailerService.sendMail({
+          to: recipientEmail,
+          subject: `You have been invited to ${event.title}`,
+          html: `
+            <h2>Event Invitation</h2>
+            <p>Hello ${recipientName},</p>
+            <p>You have been invited to attend: <strong>${event.title}</strong></p>
+            <p><strong>Event Details:</strong></p>
+            <ul>
+              <li>Start Time: ${new Date(event.startTime).toLocaleString()}</li>
+              <li>End Time: ${new Date(event.endTime).toLocaleString()}</li>
+            </ul>
+            ${event.description ? `<p>${event.description}</p>` : ''}
+            <p>
+              <a href="${inviteLink}" style="display: inline-block; padding: 10px 20px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px;">
+                ${invite.token ? 'Accept Invitation' : 'View Invitation'}
+              </a>
+            </p>
+            <p>If the button doesn't work, copy and paste this link into your browser:</p>
+            <p>${inviteLink}</p>
+          `,
+          text: `
+            Event Invitation
+            
+            Hello ${recipientName},
+            
+            You have been invited to attend: ${event.title}
+            
+            Event Details:
+            - Start Time: ${new Date(event.startTime).toLocaleString()}
+            - End Time: ${new Date(event.endTime).toLocaleString()}
+            
+            ${event.description ? `Description: ${event.description}` : ''}
+            
+            Click here to accept: ${inviteLink}
+          `,
+        });
+      }
+    } catch (error) {
+      // Log error but don't fail the invite creation
+      console.error('Failed to send invite email:', error);
+    }
   }
 }
