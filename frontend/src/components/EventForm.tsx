@@ -449,6 +449,7 @@ function EventForm() {
                                 startTime={event.startTime}
                                 endTime={event.endTime}
                                 requestedQuantity={allocation.quantity}
+                                excludeEventId={id || undefined}
                                 onAvailabilityCheck={(available, details) => {
                                   // Store availability status for validation
                                   const updated = [...resourceAllocations];

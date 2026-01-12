@@ -2,6 +2,40 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import '../App.css';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Line,
+  ComposedChart,
+} from 'recharts';
+
+// Color schemes for charts
+const CHART_COLORS = {
+  primary: '#3b82f6',
+  secondary: '#8b5cf6',
+  success: '#10b981',
+  warning: '#f59e0b',
+  danger: '#ef4444',
+  info: '#06b6d4',
+};
+
+const VIOLATION_COLORS = ['#ef4444', '#f59e0b', '#8b5cf6'];
+
+// Helper function to truncate text intelligently
+const truncateText = (text: string, maxLength: number = 20): string => {
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength - 3) + '...';
+};
 
 function ReportsDashboard() {
   const { user, isAdmin } = useAuth();
@@ -12,6 +46,8 @@ function ReportsDashboard() {
   const [resourceUtilization, setResourceUtilization] = useState<any[]>([]);
   const [parentChildViolations, setParentChildViolations] = useState<any[]>([]);
   const [externalAttendees, setExternalAttendees] = useState<any[]>([]);
+  const [capacityUtilization, setCapacityUtilization] = useState<any[]>([]);
+  const [showUpRate, setShowUpRate] = useState<any[]>([]);
   const [threshold, setThreshold] = useState(10);
 
   useEffect(() => {
@@ -25,6 +61,10 @@ function ReportsDashboard() {
       loadParentChildViolations();
     } else if (activeTab === 'external-attendees') {
       loadExternalAttendees();
+    } else if (activeTab === 'capacity-utilization') {
+      loadCapacityUtilization();
+    } else if (activeTab === 'show-up-rate') {
+      loadShowUpRate();
     }
   }, [activeTab, user, threshold]);
 
@@ -95,13 +135,185 @@ function ReportsDashboard() {
     }
   };
 
+  const loadCapacityUtilization = async () => {
+    setLoading(true);
+    try {
+      const params: any = {};
+      if (!isAdmin && user?.organizationId) {
+        params.organizationId = user.organizationId;
+      }
+      const response = await api.get('/reports/capacity-utilization', { params });
+      setCapacityUtilization(response.data);
+    } catch (error) {
+      console.error('Failed to load capacity utilization:', error);
+      alert('Failed to load capacity utilization');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadShowUpRate = async () => {
+    setLoading(true);
+    try {
+      const params: any = {};
+      if (!isAdmin && user?.organizationId) {
+        params.organizationId = user.organizationId;
+      }
+      const response = await api.get('/reports/show-up-rate', { params });
+      setShowUpRate(response.data);
+    } catch (error) {
+      console.error('Failed to load show-up rate:', error);
+      alert('Failed to load show-up rate');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Prepare chart data
+  const prepareCapacityChartData = () => {
+    return capacityUtilization
+      .slice()
+      .sort((a, b) => parseFloat(b.utilization_percentage || 0) - parseFloat(a.utilization_percentage || 0))
+      .slice(0, 15)
+      .map((item, index) => ({
+        name: `${index + 1}. ${truncateText(item.title || item.event_title || 'Unknown', 25)}`,
+        fullName: item.title || item.event_title || 'Unknown',
+        utilization: parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0),
+        capacity: item.capacity,
+        attendance: item.attendance_count || item.registered_attendees || 0,
+        status: item.fill_status || (parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) > 100 ? 'Over-filled' : 
+               parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) >= 80 ? 'Well-filled' : 
+               parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) >= 50 ? 'Moderately-filled' : 'Under-filled'),
+      }));
+  };
+
+  const prepareShowUpRateChartData = () => {
+    return showUpRate
+      .slice()
+      .sort((a, b) => parseFloat(b.show_up_rate || b.show_up_rate_percentage || 0) - parseFloat(a.show_up_rate || a.show_up_rate_percentage || 0))
+      .slice(0, 15)
+      .map((item, index) => ({
+        name: `${index + 1}. ${truncateText(item.title || item.event_title || 'Unknown', 25)}`,
+        fullName: item.title || item.event_title || 'Unknown',
+        showUpRate: parseFloat(item.show_up_rate || item.show_up_rate_percentage || 0),
+        registered: item.total_registrations || 0,
+        checkedIn: item.checked_in_count || item.total_check_ins || 0,
+        notCheckedIn: (item.total_registrations || 0) - (item.checked_in_count || item.total_check_ins || 0),
+      }));
+  };
+
+  const prepareResourceUtilizationChartData = () => {
+    return resourceUtilization
+      .slice()
+      .sort((a, b) => parseFloat(b.total_hours_used || 0) - parseFloat(a.total_hours_used || 0))
+      .slice(0, 15)
+      .map((item, index) => ({
+        name: `${index + 1}. ${truncateText(item.resource_name || 'Unknown', 20)}`,
+        fullName: item.resource_name || 'Unknown',
+        hoursUsed: parseFloat(item.total_hours_used || 0),
+        peakConcurrent: item.peak_concurrent_usage || 0,
+        maxCapacity: item.max_capacity || 0,
+      }));
+  };
+
+  const prepareViolationChartData = () => {
+    const violationCounts = violatedConstraints.reduce((acc: any, item: any) => {
+      const type = item.violation_type?.replace(/_/g, ' ') || 'Unknown';
+      acc[type] = (acc[type] || 0) + 1;
+      return acc;
+    }, {});
+
+    return Object.entries(violationCounts).map(([name, value]) => ({
+      name: truncateText(name, 30),
+      fullName: name,
+      value,
+    }));
+  };
+
+  const prepareViolationByResourceData = () => {
+    const resourceCounts = violatedConstraints.reduce((acc: any, item: any) => {
+      const resource = item.resource_name || 'Unknown';
+      acc[resource] = (acc[resource] || 0) + 1;
+      return acc;
+    }, {});
+
+    return Object.entries(resourceCounts)
+      .map(([name, value], index) => ({
+        name: `${index + 1}. ${truncateText(name, 18)}`,
+        fullName: name,
+        count: value as number,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  };
+
+  const prepareExternalAttendeesChartData = () => {
+    return externalAttendees
+      .slice()
+      .sort((a, b) => (b.external_attendee_count || 0) - (a.external_attendee_count || 0))
+      .slice(0, 15)
+      .map((item, index) => ({
+        name: `${index + 1}. ${truncateText(item.title || 'Unknown', 25)}`,
+        fullName: item.title || 'Unknown',
+        externalCount: item.external_attendee_count || 0,
+        capacity: item.capacity || 0,
+      }));
+  };
+
+  const prepareDoubleBookedChartData = () => {
+    const userCounts = doubleBookedUsers.reduce((acc: any, item: any) => {
+      const email = item.email || 'Unknown';
+      acc[email] = (acc[email] || 0) + 1;
+      return acc;
+    }, {});
+
+    return Object.entries(userCounts)
+      .map(([name, count], index) => ({
+        name: `${index + 1}. ${truncateText(name, 20)}`,
+        fullName: name,
+        count: count as number,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  };
+
   const tabs = [
     { id: 'double-booked', label: 'Double-Booked Users', icon: '⚠️' },
     { id: 'violated-constraints', label: 'Resource Violations', icon: '🚫' },
     { id: 'resource-utilization', label: 'Resource Utilization', icon: '📊' },
     { id: 'parent-child-violations', label: 'Event Hierarchy', icon: '🔗' },
     { id: 'external-attendees', label: 'External Attendees', icon: '👥' },
+    { id: 'capacity-utilization', label: 'Event Performance Analytics', icon: '📈' },
+    { id: 'show-up-rate', label: 'Engagement & Conversion Analytics', icon: '✅' },
   ];
+
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      const data = payload[0]?.payload;
+      const fullName = data?.fullName || label;
+      return (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '0.75rem',
+          border: '1px solid #e5e7eb',
+          borderRadius: '0.5rem',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+          maxWidth: '300px',
+        }}>
+          <p style={{ fontWeight: 600, marginBottom: '0.5rem', fontSize: '0.875rem', wordBreak: 'break-word' }}>
+            {fullName}
+          </p>
+          {payload.map((entry: any, index: number) => (
+            <p key={index} style={{ color: entry.color, margin: '0.25rem 0', fontSize: '0.8125rem' }}>
+              {entry.name}: {typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value}
+              {entry.dataKey === 'utilization' || entry.dataKey === 'showUpRate' ? '%' : ''}
+            </p>
+          ))}
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
     <div className="card">
@@ -155,32 +367,58 @@ function ReportsDashboard() {
               <p>No users are double-booked for overlapping events.</p>
             </div>
           ) : (
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>User Name</th>
-                    <th>Email</th>
-                    <th>Event 1</th>
-                    <th>Event 1 Time</th>
-                    <th>Event 2</th>
-                    <th>Event 2 Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {doubleBookedUsers.map((item, idx) => (
-                    <tr key={idx}>
-                      <td style={{ fontWeight: 600 }}>{item.name}</td>
-                      <td>{item.email}</td>
-                      <td>{item.event1_title}</td>
-                      <td>{new Date(item.event1_start).toLocaleString()}</td>
-                      <td>{item.event2_title}</td>
-                      <td>{new Date(item.event2_start).toLocaleString()}</td>
+            <>
+              {prepareDoubleBookedChartData().length > 0 && (
+                <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+                    Double-Booking Count by User
+                  </h3>
+                  <ResponsiveContainer width="100%" height={400}>
+                    <BarChart data={prepareDoubleBookedChartData()} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis 
+                        dataKey="name" 
+                        angle={-45} 
+                        textAnchor="end" 
+                        height={120}
+                        stroke="#6b7280"
+                        tick={{ fontSize: 12 }}
+                        interval={0}
+                      />
+                      <YAxis stroke="#6b7280" tick={{ fontSize: 12 }} />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Bar dataKey="count" fill={CHART_COLORS.danger} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>User Name</th>
+                      <th>Email</th>
+                      <th>Event 1</th>
+                      <th>Event 1 Time</th>
+                      <th>Event 2</th>
+                      <th>Event 2 Time</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {doubleBookedUsers.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 600 }}>{item.name}</td>
+                        <td>{item.email}</td>
+                        <td>{item.event1_title}</td>
+                        <td>{new Date(item.event1_start).toLocaleString()}</td>
+                        <td>{item.event2_title}</td>
+                        <td>{new Date(item.event2_start).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </>
       )}
@@ -203,32 +441,78 @@ function ReportsDashboard() {
               <p>All resource allocations are within constraints.</p>
             </div>
           ) : (
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Event</th>
-                    <th>Resource</th>
-                    <th>Violation Type</th>
-                    <th>Start Time</th>
-                    <th>End Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {violatedConstraints.map((item, idx) => (
-                    <tr key={idx}>
-                      <td style={{ fontWeight: 600 }}>{item.event_title}</td>
-                      <td>{item.resource_name}</td>
-                      <td>
-                        <span className="badge badge-danger">{item.violation_type.replace(/_/g, ' ')}</span>
-                      </td>
-                      <td>{new Date(item.start_time).toLocaleString()}</td>
-                      <td>{new Date(item.end_time).toLocaleString()}</td>
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem' }}>
+                {prepareViolationChartData().length > 0 && (
+                  <div style={{ backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+                      Violations by Type
+                    </h3>
+                    <ResponsiveContainer width="100%" height={350}>
+                      <PieChart>
+                        <Pie
+                          data={prepareViolationChartData()}
+                          cx="50%"
+                          cy="50%"
+                          labelLine={false}
+                          label={({ name, percent }: any) => `${truncateText(name, 15)}: ${(percent * 100).toFixed(0)}%`}
+                          outerRadius={100}
+                          fill="#8884d8"
+                          dataKey="value"
+                        >
+                          {prepareViolationChartData().map((_entry, index) => (
+                            <Cell key={`cell-${index}`} fill={VIOLATION_COLORS[index % VIOLATION_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<CustomTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                {prepareViolationByResourceData().length > 0 && (
+                  <div style={{ backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+                      Top Violated Resources
+                    </h3>
+                    <ResponsiveContainer width="100%" height={350}>
+                      <BarChart data={prepareViolationByResourceData()} layout="vertical" margin={{ top: 20, right: 30, left: 100, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis type="number" stroke="#6b7280" tick={{ fontSize: 12 }} />
+                        <YAxis dataKey="name" type="category" width={90} stroke="#6b7280" tick={{ fontSize: 11 }} />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Bar dataKey="count" fill={CHART_COLORS.danger} radius={[0, 4, 4, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Event</th>
+                      <th>Resource</th>
+                      <th>Violation Type</th>
+                      <th>Start Time</th>
+                      <th>End Time</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {violatedConstraints.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 600 }}>{item.event_title}</td>
+                        <td>{item.resource_name}</td>
+                        <td>
+                          <span className="badge badge-danger">{item.violation_type.replace(/_/g, ' ')}</span>
+                        </td>
+                        <td>{new Date(item.start_time).toLocaleString()}</td>
+                        <td>{new Date(item.end_time).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </>
       )}
@@ -252,48 +536,75 @@ function ReportsDashboard() {
               <p>No resource utilization data found.</p>
             </div>
           ) : (
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Organization</th>
-                    <th>Resource</th>
-                    <th>Type</th>
-                    <th>Total Hours Used</th>
-                    <th>Peak Concurrent</th>
-                    <th>Max Capacity</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {resourceUtilization.map((item, idx) => (
-                    <tr key={idx}>
-                      <td style={{ fontWeight: 600 }}>{item.organization_name}</td>
-                      <td>{item.resource_name}</td>
-                      <td>
-                        <span className={`badge badge-${
-                          item.resource_type === 'exclusive' ? 'warning' :
-                          item.resource_type === 'shareable' ? 'info' :
-                          'success'
-                        }`}>
-                          {item.resource_type}
-                        </span>
-                      </td>
-                      <td>{parseFloat(item.total_hours_used || 0).toFixed(2)} hrs</td>
-                      <td>{item.peak_concurrent_usage || 0}</td>
-                      <td>{item.max_capacity || 0}</td>
-                      <td>
-                        {item.is_underutilized ? (
-                          <span className="badge badge-warning">Underutilized</span>
-                        ) : (
-                          <span className="badge badge-success">Active</span>
-                        )}
-                      </td>
+            <>
+              <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+                  Resource Utilization Overview
+                </h3>
+                <ResponsiveContainer width="100%" height={450}>
+                  <ComposedChart data={prepareResourceUtilizationChartData()} margin={{ top: 20, right: 30, left: 20, bottom: 100 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis 
+                      dataKey="name" 
+                      angle={-45} 
+                      textAnchor="end" 
+                      height={130}
+                      stroke="#6b7280"
+                      tick={{ fontSize: 12 }}
+                      interval={0}
+                    />
+                    <YAxis yAxisId="left" stroke="#6b7280" tick={{ fontSize: 12 }} label={{ value: 'Hours Used', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle' } }} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#6b7280" tick={{ fontSize: 12 }} label={{ value: 'Peak Concurrent', angle: 90, position: 'insideRight', style: { textAnchor: 'middle' } }} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                    <Bar yAxisId="left" dataKey="hoursUsed" fill={CHART_COLORS.primary} name="Total Hours Used" radius={[4, 4, 0, 0]} />
+                    <Line yAxisId="right" type="monotone" dataKey="peakConcurrent" stroke={CHART_COLORS.warning} strokeWidth={2} name="Peak Concurrent" dot={{ fill: CHART_COLORS.warning, r: 4 }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Organization</th>
+                      <th>Resource</th>
+                      <th>Type</th>
+                      <th>Total Hours Used</th>
+                      <th>Peak Concurrent</th>
+                      <th>Max Capacity</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {resourceUtilization.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 600 }}>{item.organization_name}</td>
+                        <td>{item.resource_name}</td>
+                        <td>
+                          <span className={`badge badge-${
+                            item.resource_type === 'exclusive' ? 'warning' :
+                            item.resource_type === 'shareable' ? 'info' :
+                            'success'
+                          }`}>
+                            {item.resource_type}
+                          </span>
+                        </td>
+                        <td>{parseFloat(item.total_hours_used || 0).toFixed(2)} hrs</td>
+                        <td>{item.peak_concurrent_usage || 0}</td>
+                        <td>{item.max_capacity || 0}</td>
+                        <td>
+                          {item.is_underutilized ? (
+                            <span className="badge badge-warning">Underutilized</span>
+                          ) : (
+                            <span className="badge badge-success">Active</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </>
       )}
@@ -393,36 +704,274 @@ function ReportsDashboard() {
               <p>No events with external attendees exceeding the threshold of {threshold}.</p>
             </div>
           ) : (
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Event</th>
-                    <th>Organization</th>
-                    <th>Start Time</th>
-                    <th>End Time</th>
-                    <th>Capacity</th>
-                    <th>External Count</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {externalAttendees.map((item, idx) => (
-                    <tr key={idx}>
-                      <td style={{ fontWeight: 600 }}>{item.title}</td>
-                      <td>{item.organization_name}</td>
-                      <td>{new Date(item.start_time).toLocaleString()}</td>
-                      <td>{new Date(item.end_time).toLocaleString()}</td>
-                      <td>{item.capacity}</td>
-                      <td>
-                        <span className="badge badge-warning" style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}>
-                          {item.external_attendee_count}
-                        </span>
-                      </td>
+            <>
+              <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+                  External Attendees by Event
+                </h3>
+                <ResponsiveContainer width="100%" height={450}>
+                  <ComposedChart data={prepareExternalAttendeesChartData()} margin={{ top: 20, right: 30, left: 20, bottom: 100 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis 
+                      dataKey="name" 
+                      angle={-45} 
+                      textAnchor="end" 
+                      height={130}
+                      stroke="#6b7280"
+                      tick={{ fontSize: 12 }}
+                      interval={0}
+                    />
+                    <YAxis stroke="#6b7280" tick={{ fontSize: 12 }} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                    <Bar dataKey="externalCount" fill={CHART_COLORS.warning} name="External Attendees" radius={[4, 4, 0, 0]} />
+                    <Line type="monotone" dataKey="capacity" stroke={CHART_COLORS.info} strokeWidth={2} name="Event Capacity" strokeDasharray="5 5" dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Event</th>
+                      <th>Organization</th>
+                      <th>Start Time</th>
+                      <th>End Time</th>
+                      <th>Capacity</th>
+                      <th>External Count</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {externalAttendees.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 600 }}>{item.title}</td>
+                        <td>{item.organization_name}</td>
+                        <td>{new Date(item.start_time).toLocaleString()}</td>
+                        <td>{new Date(item.end_time).toLocaleString()}</td>
+                        <td>{item.capacity}</td>
+                        <td>
+                          <span className="badge badge-warning" style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}>
+                            {item.external_attendee_count}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* Capacity Utilization Report */}
+      {activeTab === 'capacity-utilization' && !loading && (
+        <>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+            📈 Event Performance Analytics - Capacity Utilization
+          </h2>
+          <p style={{ color: 'var(--gray-600)', marginBottom: '1.5rem' }}>
+            Percentage of event capacity filled. Identifies which events are consistently over or under-filled.
+          </p>
+          {capacityUtilization.length === 0 ? (
+            <div className="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
+                <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+              </svg>
+              <h3>No Data Available</h3>
+              <p>No capacity utilization data found.</p>
             </div>
+          ) : (
+            <>
+              <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+                  Capacity Utilization by Event (Top 15)
+                </h3>
+                <ResponsiveContainer width="100%" height={550}>
+                  <BarChart data={prepareCapacityChartData()} layout="vertical" margin={{ top: 20, right: 30, left: 180, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis type="number" domain={[0, 'dataMax + 10']} stroke="#6b7280" tick={{ fontSize: 12 }} label={{ value: 'Utilization %', position: 'insideBottom', offset: -5, style: { textAnchor: 'middle' } }} />
+                    <YAxis 
+                      dataKey="name" 
+                      type="category" 
+                      width={170}
+                      stroke="#6b7280"
+                      tick={{ fontSize: 11 }}
+                      interval={0}
+                    />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                    <Bar dataKey="utilization" fill={CHART_COLORS.primary} name="Utilization %" radius={[0, 4, 4, 0]}>
+                      {prepareCapacityChartData().map((entry, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={
+                            entry.utilization > 100
+                              ? CHART_COLORS.danger
+                              : entry.utilization >= 80
+                              ? CHART_COLORS.success
+                              : entry.utilization >= 50
+                              ? CHART_COLORS.info
+                              : CHART_COLORS.warning
+                          }
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Event</th>
+                      <th>Organization</th>
+                      <th>Start Time</th>
+                      <th>End Time</th>
+                      <th>Capacity</th>
+                      <th>Attendance Count</th>
+                      <th>Utilization %</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {capacityUtilization.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 600 }}>{item.title || item.event_title}</td>
+                        <td>{item.organization_name}</td>
+                        <td>{new Date(item.start_time || item.startTime).toLocaleString()}</td>
+                        <td>{new Date(item.end_time || item.endTime).toLocaleString()}</td>
+                        <td>{item.capacity}</td>
+                        <td>{item.attendance_count || item.registered_attendees || 0}</td>
+                        <td>
+                          <span
+                            className={`badge ${
+                              parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) > 100
+                                ? 'badge-danger'
+                                : parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) >= 80
+                                ? 'badge-success'
+                                : parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) >= 50
+                                ? 'badge-info'
+                                : 'badge-warning'
+                            }`}
+                            style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}
+                          >
+                            {parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0).toFixed(2)}%
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className={`badge ${
+                              item.fill_status === 'Over-filled'
+                                ? 'badge-danger'
+                                : item.fill_status === 'Well-filled'
+                                ? 'badge-success'
+                                : item.fill_status === 'Moderately-filled'
+                                ? 'badge-info'
+                                : 'badge-warning'
+                            }`}
+                          >
+                            {item.fill_status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* Show-Up Rate Report */}
+      {activeTab === 'show-up-rate' && !loading && (
+        <>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+            ✅ Engagement & Conversion Analytics - Show-Up Rate
+          </h2>
+          <p style={{ color: 'var(--gray-600)', marginBottom: '1.5rem' }}>
+            Compare checked-in attendees vs. total registrations. Helps predict actual headcount versus registration numbers.
+          </p>
+          {showUpRate.length === 0 ? (
+            <div className="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <h3>No Data Available</h3>
+              <p>No show-up rate data found. Events need registered attendees to calculate show-up rates.</p>
+            </div>
+          ) : (
+            <>
+              <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+                  Show-Up Rate Analysis (Top 15 Events)
+                </h3>
+                <ResponsiveContainer width="100%" height={550}>
+                  <ComposedChart data={prepareShowUpRateChartData()} margin={{ top: 20, right: 50, left: 20, bottom: 100 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis 
+                      dataKey="name" 
+                      angle={-45} 
+                      textAnchor="end" 
+                      height={130}
+                      stroke="#6b7280"
+                      tick={{ fontSize: 12 }}
+                      interval={0}
+                    />
+                    <YAxis yAxisId="left" stroke="#6b7280" tick={{ fontSize: 12 }} label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle' } }} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#6b7280" tick={{ fontSize: 12 }} domain={[0, 100]} label={{ value: 'Show-Up Rate %', angle: 90, position: 'insideRight', style: { textAnchor: 'middle' } }} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                    <Bar yAxisId="left" dataKey="registered" fill={CHART_COLORS.info} name="Total Registered" radius={[4, 4, 0, 0]} />
+                    <Bar yAxisId="left" dataKey="checkedIn" fill={CHART_COLORS.success} name="Checked In" radius={[4, 4, 0, 0]} />
+                    <Line yAxisId="right" type="monotone" dataKey="showUpRate" stroke={CHART_COLORS.primary} strokeWidth={3} name="Show-Up Rate %" dot={{ fill: CHART_COLORS.primary, r: 4 }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Event</th>
+                      <th>Organization</th>
+                      <th>Start Time</th>
+                      <th>End Time</th>
+                      <th>Total Registrations</th>
+                      <th>Checked In</th>
+                      <th>Show-Up Rate %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {showUpRate.map((item, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 600 }}>{item.title || item.event_title}</td>
+                        <td>{item.organization_name}</td>
+                        <td>{new Date(item.start_time || item.startTime).toLocaleString()}</td>
+                        <td>{new Date(item.end_time || item.endTime).toLocaleString()}</td>
+                        <td>{item.total_registrations || 0}</td>
+                        <td>{item.checked_in_count || item.total_check_ins || 0}</td>
+                        <td>
+                          <span
+                            className={`badge ${
+                              parseFloat(item.show_up_rate || item.show_up_rate_percentage || 0) >= 80
+                                ? 'badge-success'
+                                : parseFloat(item.show_up_rate || item.show_up_rate_percentage || 0) >= 50
+                                ? 'badge-info'
+                                : 'badge-warning'
+                            }`}
+                            style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}
+                          >
+                            {parseFloat(item.show_up_rate || item.show_up_rate_percentage || 0).toFixed(2)}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </>
       )}

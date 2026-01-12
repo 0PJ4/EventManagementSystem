@@ -59,11 +59,12 @@ export class ResourcesController {
     @Param('id') id: string,
     @Query('startTime') startTime: string,
     @Query('endTime') endTime: string,
+    @Query('excludeEventId') excludeEventId?: string,
   ) {
     if (!startTime || !endTime) {
       throw new BadRequestException('startTime and endTime query parameters are required');
     }
-    return this.resourcesService.getAvailability(id, new Date(startTime), new Date(endTime));
+    return this.resourcesService.getAvailability(id, new Date(startTime), new Date(endTime), excludeEventId);
   }
 
   @Patch(':id')

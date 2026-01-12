@@ -73,6 +73,7 @@ export class ResourcesService {
     resourceId: string,
     startTime: Date,
     endTime: Date,
+    excludeEventId?: string,
   ): Promise<{
     available: boolean;
     availableQuantity: number;
@@ -101,8 +102,12 @@ export class ResourcesService {
       throw new NotFoundException(`Resource with ID ${resourceId} not found`);
     }
 
-    // Find all overlapping allocations
+    // Find all overlapping allocations, excluding the current event if provided
     const overlappingAllocations = resource.allocations?.filter((allocation) => {
+      // Exclude the current event from conflicts
+      if (excludeEventId && allocation.event.id === excludeEventId) {
+        return false;
+      }
       const allocStart = new Date(allocation.event.startTime);
       const allocEnd = new Date(allocation.event.endTime);
       // Check if time ranges overlap

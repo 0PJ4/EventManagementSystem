@@ -37,6 +37,7 @@ interface ResourceAvailabilityViewerProps {
   startTime: string;
   endTime: string;
   requestedQuantity?: number;
+  excludeEventId?: string;
   onAvailabilityCheck?: (available: boolean, details: AvailabilityResponse) => void;
 }
 
@@ -46,6 +47,7 @@ function ResourceAvailabilityViewer({
   startTime,
   endTime,
   requestedQuantity = 1,
+  excludeEventId,
   onAvailabilityCheck,
 }: ResourceAvailabilityViewerProps) {
   const [availability, setAvailability] = useState<AvailabilityResponse | null>(null);
@@ -56,7 +58,7 @@ function ResourceAvailabilityViewer({
     if (resourceId && startTime && endTime) {
       checkAvailability();
     }
-  }, [resourceId, startTime, endTime]);
+  }, [resourceId, startTime, endTime, excludeEventId]);
 
   const checkAvailability = async () => {
     if (!startTime || !endTime) return;
@@ -64,12 +66,14 @@ function ResourceAvailabilityViewer({
     setLoading(true);
     setError(null);
     try {
-      const response = await api.get(`/resources/${resourceId}/availability`, {
-        params: {
-          startTime: new Date(startTime).toISOString(),
-          endTime: new Date(endTime).toISOString(),
-        },
-      });
+      const params: any = {
+        startTime: new Date(startTime).toISOString(),
+        endTime: new Date(endTime).toISOString(),
+      };
+      if (excludeEventId) {
+        params.excludeEventId = excludeEventId;
+      }
+      const response = await api.get(`/resources/${resourceId}/availability`, { params });
       setAvailability(response.data);
       if (onAvailabilityCheck) {
         onAvailabilityCheck(

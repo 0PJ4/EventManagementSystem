@@ -23,6 +23,7 @@
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/data-source.ts",
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/data-source.ts",
     "seed": "ts-node src/seed.ts",
+    "seed:test": "ts-node src/scripts/seed-test-data.ts",
     "create-admin": "ts-node src/create-admin.ts"
   },
   "dependencies": {
@@ -41,6 +42,7 @@
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.11.3",
+    "recharts": "^3.6.0",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",
     "typeorm": "^0.3.17"

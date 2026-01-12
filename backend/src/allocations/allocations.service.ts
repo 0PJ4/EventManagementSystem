@@ -5,6 +5,7 @@ import { ResourceAllocation } from '../entities/resource-allocation.entity';
 import { Resource, ResourceType } from '../entities/resource.entity';
 import { Event } from '../entities/event.entity';
 import { CreateAllocationDto } from './dto/create-allocation.dto';
+import { UpdateAllocationDto } from './dto/update-allocation.dto';
 
 @Injectable()
 export class AllocationsService {
@@ -145,7 +146,7 @@ export class AllocationsService {
     });
   }
 
-  async update(id: string, updateAllocationDto: { quantity: number }): Promise<ResourceAllocation> {
+  async update(id: string, updateAllocationDto: UpdateAllocationDto): Promise<ResourceAllocation> {
     const allocation = await this.allocationRepository.findOne({
       where: { id },
       relations: ['resource', 'event'],
