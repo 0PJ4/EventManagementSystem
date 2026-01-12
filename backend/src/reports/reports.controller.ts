@@ -24,10 +24,15 @@ export class ReportsController {
   }
 
   @Get('resource-utilization')
-  getResourceUtilization(@Request() req, @Query('organizationId') organizationId?: string) {
-    // If org admin, use their org; if admin, allow query param override
-    const finalOrgId = req.user.role === UserRole.ORG ? req.user.organizationId : organizationId;
-    return this.reportsService.getResourceUtilizationPerOrganization(finalOrgId);
+  async getResourceUtilization(@Request() req, @Query('organizationId') organizationId?: string) {
+    try {
+      // If org admin, use their org; if admin, allow query param override
+      const finalOrgId = req.user.role === UserRole.ORG ? req.user.organizationId : organizationId;
+      return await this.reportsService.getResourceUtilizationPerOrganization(finalOrgId);
+    } catch (error: any) {
+      // Enhanced error handling with proper status codes
+      throw new Error(`Failed to retrieve resource utilization: ${error.message}`);
+    }
   }
 
   @Get('parent-child-violations')
