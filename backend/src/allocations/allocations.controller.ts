@@ -22,8 +22,9 @@ export class AllocationsController {
   findAll(
     @Query('eventId') eventId?: string,
     @Query('resourceId') resourceId?: string,
+    @Query('search') search?: string,
   ) {
-    return this.allocationsService.findAll(eventId, resourceId);
+    return this.allocationsService.findAll(eventId, resourceId, search);
   }
 
   @Patch(':id')

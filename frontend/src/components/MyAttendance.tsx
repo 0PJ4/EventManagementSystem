@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import { isPastEvent } from '../utils/eventUtils';
+import { getCurrentEasternTime } from '../utils/timeUtils';
+import { formatTableDate } from '../utils/dateFormatter';
 import '../App.css';
 
 interface Attendance {
@@ -57,20 +60,32 @@ function MyAttendance() {
     );
   }
 
-  // Filter events that have started (past + ongoing) - only these count for attendance percentage
-  const now = new Date();
-  const pastAndOngoingAttendances = attendances.filter(att => {
+  // ============================================
+  // EVENT CATEGORIZATION LOGIC
+  // ============================================
+  // 
+  // For attendance calculations, we only consider events that have started:
+  // - Started Events: event.startTime <= now (includes both current and past events)
+  // - Past Events: event.endTime < now (for display purposes)
+  //
+  // This ensures attendance rate is calculated only on events that have occurred,
+  // not on future events where attendance hasn't been determined yet.
+  
+  // Filter attendances for events that have started (past + ongoing)
+  // Only these count for attendance percentage calculations
+  // Logic: event has started if startTime <= current Eastern Time
+  const now = getCurrentEasternTime();
+  const attendancesWithEventData = attendances.filter(att => att.event !== undefined);
+  const startedAttendances = attendancesWithEventData.filter((att: Attendance) => {
     if (!att.event) return false;
-    const eventEnd = new Date(att.event.endTime);
-    const eventStart = new Date(att.event.startTime);
-    // Include events that have started (ongoing or past)
-    return now >= eventStart;
+    const eventStartTime = new Date(att.event.startTime);
+    return eventStartTime <= now;
   });
 
   // Calculate statistics based on past and ongoing events
   // Only events that have started are considered for attendance percentage
-  const totalPastAndOngoing = pastAndOngoingAttendances.length;
-  const totalAttended = pastAndOngoingAttendances.filter(att => att.checkedInAt).length;
+  const totalPastAndOngoing = startedAttendances.length;
+  const totalAttended = startedAttendances.filter((att: Attendance) => att.checkedInAt).length;
   const totalMissed = totalPastAndOngoing - totalAttended; // Events that started but user didn't check in
   
   // Attendance rate: (attended events / total past and ongoing events) * 100
@@ -83,8 +98,9 @@ function MyAttendance() {
   const totalRegistered = attendances.length;
 
   // Filter past events (events that have ended) for display
+  // Using utility function for consistent logic
   const pastAttendances = attendances.filter(att => 
-    att.event && new Date(att.event.endTime) < now
+    att.event && isPastEvent(att.event)
   );
 
   return (
@@ -220,7 +236,7 @@ function MyAttendance() {
                     <td>{attendance.event?.organization?.name || 'N/A'}</td>
                     <td>
                       {attendance.event?.startTime 
-                        ? new Date(attendance.event.startTime).toLocaleDateString()
+                        ? formatTableDate(attendance.event.startTime)
                         : 'N/A'}
                     </td>
                     <td>

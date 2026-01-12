@@ -1,8 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import ActionsDropdown from './ActionsDropdown';
+import { categorizeEvents, isPastEvent, isCurrentEvent, isUpcomingEvent } from '../utils/eventUtils';
+import { getCurrentEasternTime } from '../utils/timeUtils';
+import { formatTableDate, formatFullDate } from '../utils/dateFormatter';
 import '../App.css';
 
 interface Event {
@@ -32,13 +36,13 @@ interface Attendance {
 
 function EventsList() {
   const { user, isAdmin, isOrg } = useAuth();
-  const [events, setEvents] = useState<Event[]>([]);
   const [allEvents, setAllEvents] = useState<Event[]>([]); // Store all events from API
   const [myAttendances, setMyAttendances] = useState<Attendance[]>([]);
   const [attendanceCounts, setAttendanceCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'available' | 'registered' | 'ongoing' | 'past' | 'upcoming'>('available');
   const [eventFilter, setEventFilter] = useState<'all' | 'my-org' | 'global'>('all');
+  const [searchTerm, setSearchTerm] = useState<string>('');
   
   // Set default tab based on role after mount
   useEffect(() => {
@@ -47,6 +51,7 @@ function EventsList() {
     }
   }, [isAdmin, isOrg]);
 
+  // Load data once on mount and when user/filter changes (not on search)
   useEffect(() => {
     loadData();
   }, [user, eventFilter]);
@@ -54,24 +59,18 @@ function EventsList() {
   const loadData = async () => {
     try {
       setLoading(true);
+      const params: any = {};
+      if (eventFilter === 'my-org' && user?.organizationId) {
+        params.organizationId = user.organizationId;
+      }
+      
       const [eventsRes, attendancesRes] = await Promise.all([
-        api.get('/events'),
+        api.get('/events', { params }),
         user ? api.get('/attendances').catch(() => ({ data: [] })) : Promise.resolve({ data: [] })
       ]);
       
       const eventsData = eventsRes.data || [];
       setAllEvents(eventsData);
-      
-      // Apply filter
-      let filteredEvents = eventsData;
-      if (eventFilter === 'my-org' && user?.organizationId) {
-        filteredEvents = eventsData.filter((e: Event) => e.organizationId === user.organizationId);
-      } else if (eventFilter === 'global') {
-        filteredEvents = eventsData.filter((e: Event) => 
-          e.organizationId !== user?.organizationId || e.allowExternalAttendees
-        );
-      }
-      setEvents(filteredEvents);
       
       // Filter attendances for current user and attach event details
       const allAttendances = attendancesRes.data || [];
@@ -91,15 +90,40 @@ function EventsList() {
       setAttendanceCounts(counts);
     } catch (error: any) {
       console.error('Failed to load events:', error);
-      alert(error.response?.data?.message || 'Failed to load events');
+      toast.error(error.response?.data?.message || 'Failed to load events');
     } finally {
       setLoading(false);
     }
   };
 
+  // Client-side filtering with useMemo for performance
+  const filteredEvents = useMemo(() => {
+    let filtered = [...allEvents];
+    
+    // Apply organization filter
+    if (eventFilter === 'my-org' && user?.organizationId) {
+      filtered = filtered.filter((e: Event) => e.organizationId === user.organizationId);
+    } else if (eventFilter === 'global') {
+      filtered = filtered.filter((e: Event) => 
+        e.organizationId !== user?.organizationId || e.allowExternalAttendees
+      );
+    }
+    
+    // Apply search filter (instant, no API call)
+    if (searchTerm.trim()) {
+      const searchLower = searchTerm.toLowerCase().trim();
+      filtered = filtered.filter((e: Event) => 
+        e.title?.toLowerCase().includes(searchLower) ||
+        e.description?.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    return filtered;
+  }, [allEvents, eventFilter, user?.organizationId, searchTerm]);
+
   const registerForEvent = async (eventId: string) => {
     if (!user) {
-      alert('Please login to register for events');
+      toast.error('Please login to register for events');
       return;
     }
     
@@ -108,11 +132,11 @@ function EventsList() {
         eventId,
         userId: user.id,
       });
-      alert('Successfully registered for event!');
+      toast.success('Successfully registered for event!');
       loadData();
     } catch (error: any) {
       console.error('Failed to register:', error);
-      alert(error.response?.data?.message || 'Failed to register for event');
+      toast.error(error.response?.data?.message || 'Failed to register for event');
     }
   };
 
@@ -121,22 +145,22 @@ function EventsList() {
     
     try {
       await api.delete(`/attendances/${attendanceId}`);
-      alert('Successfully unregistered from event');
+      toast.success('Successfully unregistered from event');
       loadData();
     } catch (error: any) {
       console.error('Failed to unregister:', error);
-      alert(error.response?.data?.message || 'Failed to unregister');
+      toast.error(error.response?.data?.message || 'Failed to unregister');
     }
   };
 
   const checkInForEvent = async (attendanceId: string) => {
     try {
       await api.post(`/attendances/${attendanceId}/checkin`);
-      alert('Successfully checked in!');
+      toast.success('Successfully checked in!');
       loadData();
     } catch (error: any) {
       console.error('Failed to check in:', error);
-      alert(error.response?.data?.message || 'Failed to check in');
+      toast.error(error.response?.data?.message || 'Failed to check in');
     }
   };
 
@@ -144,10 +168,11 @@ function EventsList() {
     if (!confirm('Are you sure you want to delete this event?')) return;
     try {
       await api.delete(`/events/${id}`);
+      toast.success('Event deleted');
       loadData();
     } catch (error: any) {
       console.error('Failed to delete event:', error);
-      alert(error.response?.data?.message || 'Failed to delete event');
+      toast.error(error.response?.data?.message || 'Failed to delete event');
     }
   };
 
@@ -159,55 +184,61 @@ function EventsList() {
     );
   }
 
-  // Segregate events
+  // ============================================
+  // EVENT CATEGORIZATION LOGIC
+  // ============================================
+  // 
+  // Events are categorized into three time-based categories:
+  // 1. Past Events: event.endTime < now (event has ended)
+  // 2. Current/Ongoing Events: now >= event.startTime && now <= event.endTime (event is happening now)
+  // 3. Upcoming Events: now < event.startTime (event hasn't started yet)
+  //
+  // This logic is centralized in utils/eventUtils.ts for consistency across the application.
+  
+  // Segregate events by registration status
   const registeredEventIds = new Set(myAttendances.map(att => att.eventId));
-  const registeredEvents = events.filter(event => registeredEventIds.has(event.id));
-  const availableEvents = events.filter(event => !registeredEventIds.has(event.id));
+  const allRegisteredEvents = filteredEvents.filter(event => registeredEventIds.has(event.id));
+  const availableEvents = filteredEvents.filter(event => !registeredEventIds.has(event.id));
   
-  // Time-based filtering
-  const now = new Date();
+  // Categorize all events by time using utility functions
+  // This ensures consistent logic: past, current, and upcoming are clearly defined
+  const { pastEvents, currentEvents, upcomingEvents } = categorizeEvents(filteredEvents);
   
-  // For users: ongoing events (must be registered)
-  const userOngoingEvents = registeredEvents.filter(event => {
-    const eventStart = new Date(event.startTime);
-    const eventEnd = new Date(event.endTime);
-    return now >= eventStart && now <= eventEnd;
-  });
+  // For regular users: filter registered events by time category
+  // 
+  // CONSTRAINT 1: Past events should ONLY include registered events that have ended
+  //   - Regular users cannot see past events they're not registered for
+  //   - This ensures data isolation and privacy
+  const userPastEvents = allRegisteredEvents.filter(event => isPastEvent(event));
   
-  // For users: past events (must be registered, event has ended)
-  const userPastEvents = registeredEvents.filter(event => {
-    const eventEnd = new Date(event.endTime);
-    return now > eventEnd;
-  });
+  // CONSTRAINT 2: "Registered" tab should NOT include past events
+  //   - If an event ends, it must move from "Registered" to "Past Events"
+  const userOngoingEvents = allRegisteredEvents.filter(event => isCurrentEvent(event));
+  const userUpcomingRegisteredEvents = allRegisteredEvents.filter(event => isUpcomingEvent(event));
   
-  // For admins/org admins: all ongoing events (including draft events)
-  const adminOngoingEvents = events.filter(event => {
-    const eventStart = new Date(event.startTime);
-    const eventEnd = new Date(event.endTime);
-    return now >= eventStart && now <= eventEnd;
-  });
+  // CONSTRAINT 3: Once an event starts, it moves from "Registered" to "Ongoing"
+  //   - "Registered" tab shows ONLY upcoming events (not ongoing)
+  //   - "Ongoing" tab shows events that have started but not ended
+  //   - Events cannot appear in both tabs simultaneously
+  const userRegisteredEvents = userUpcomingRegisteredEvents; // Only upcoming, NOT ongoing
   
-  // For admins/org admins: upcoming events (not started yet)
-  const upcomingEvents = events.filter(event => {
-    const eventStart = new Date(event.startTime);
-    return now < eventStart;
-  });
-  
-  // For admins/org admins: past events (already ended)
-  const adminPastEvents = events.filter(event => {
-    const eventEnd = new Date(event.endTime);
-    return now > eventEnd;
-  });
+  // For admins/org admins: use all events (no registration filter needed)
+  // - Admins see all events regardless of registration status
+  // - Logic: Use the pre-categorized events directly
+  const adminOngoingEvents = currentEvents;
+  const adminPastEvents = pastEvents;
 
   const displayEvents = activeTab === 'available' 
     ? availableEvents 
+    : activeTab === 'registered'
+    ? (isAdmin || isOrg ? allRegisteredEvents : userRegisteredEvents) // For users: exclude past events
     : activeTab === 'ongoing'
     ? (isAdmin || isOrg ? adminOngoingEvents : userOngoingEvents)
     : activeTab === 'past'
-    ? (isAdmin || isOrg ? adminPastEvents : userPastEvents)
+    ? (isAdmin || isOrg ? adminPastEvents : userPastEvents) // For users: only registered past events
     : activeTab === 'upcoming'
     ? upcomingEvents
-    : registeredEvents;
+    : allRegisteredEvents;
 
   return (
     <div className="card">
@@ -226,42 +257,102 @@ function EventsList() {
         </div>
       </div>
 
-      {/* Event Filter Dropdown */}
+      {/* Search and Filter Section */}
       <div style={{ 
         marginBottom: '1.5rem',
         display: 'flex',
-        alignItems: 'center',
-        gap: '1rem',
-        flexWrap: 'wrap'
+        flexDirection: 'column',
+        gap: '1rem'
       }}>
-        <label style={{ 
-          fontSize: '0.875rem', 
-          fontWeight: 600, 
-          color: 'var(--gray-700)',
-          whiteSpace: 'nowrap'
+        {/* Search Input */}
+        <div style={{ position: 'relative', width: '100%' }}>
+          <svg
+            style={{
+              position: 'absolute',
+              left: '0.875rem',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '20px',
+              height: '20px',
+              color: 'var(--gray-400)',
+              pointerEvents: 'none',
+              zIndex: 1
+            }}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="11" cy="11" r="8"></circle>
+            <path d="m21 21-4.35-4.35"></path>
+          </svg>
+          <input
+            type="text"
+            placeholder="Search events by title or description..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '0.75rem 1rem 0.75rem 2.75rem',
+              fontSize: '0.9375rem',
+              lineHeight: '1.5',
+              color: 'var(--gray-900)',
+              background: 'white',
+              border: '1px solid var(--gray-300)',
+              borderRadius: 'var(--radius-md)',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = 'var(--primary-500)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'var(--gray-300)';
+              e.target.style.boxShadow = '0 1px 2px 0 rgba(0, 0, 0, 0.05)';
+            }}
+          />
+        </div>
+        
+        {/* Filter Dropdown */}
+        <div style={{ 
+          display: 'flex',
+          alignItems: 'center',
+          gap: '1rem',
+          flexWrap: 'wrap'
         }}>
-          Filter Events:
-        </label>
-        <select
-          value={eventFilter}
-          onChange={(e) => setEventFilter(e.target.value as 'all' | 'my-org' | 'global')}
-          style={{
-            padding: '0.5rem 1rem',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--gray-300)',
-            backgroundColor: 'white',
-            fontSize: '0.875rem',
-            color: 'var(--gray-900)',
-            cursor: 'pointer',
-            minWidth: '180px'
-          }}
-        >
-          <option value="all">All Events</option>
-          {user?.organizationId && (
-            <option value="my-org">My Organization</option>
-          )}
-          <option value="global">Global Events</option>
-        </select>
+          <label style={{ 
+            fontSize: '0.875rem', 
+            fontWeight: 600, 
+            color: 'var(--gray-700)',
+            whiteSpace: 'nowrap'
+          }}>
+            Filter Events:
+          </label>
+          <select
+            value={eventFilter}
+            onChange={(e) => setEventFilter(e.target.value as 'all' | 'my-org' | 'global')}
+            style={{
+              padding: '0.5rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--gray-300)',
+              backgroundColor: 'white',
+              fontSize: '0.875rem',
+              color: 'var(--gray-900)',
+              cursor: 'pointer',
+              minWidth: '180px',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <option value="all">All Events</option>
+            {user?.organizationId && (
+              <option value="my-org">My Organization</option>
+            )}
+            <option value="global">Global Events</option>
+          </select>
+        </div>
       </div>
 
       {/* Tab Navigation for Users */}
@@ -283,7 +374,7 @@ function EventsList() {
             onClick={() => setActiveTab('registered')}
             className={`btn ${activeTab === 'registered' ? 'btn-primary' : 'btn-secondary'}`}
           >
-            My Registered Events ({registeredEvents.length})
+            My Registered Events ({userRegisteredEvents.length})
           </button>
           <button
             onClick={() => setActiveTab('ongoing')}
@@ -382,8 +473,8 @@ function EventsList() {
                   <tr key={event.id}>
                     <td style={{ fontWeight: 600 }}>{event.title}</td>
                     <td>{event.organization?.name || 'N/A'}</td>
-                    <td>{new Date(event.startTime).toLocaleString()}</td>
-                    <td>{new Date(event.endTime).toLocaleString()}</td>
+                    <td>{formatTableDate(event.startTime)}</td>
+                    <td>{formatTableDate(event.endTime)}</td>
                     <td>{event.capacity}</td>
                     <td>
                       <span className={`badge badge-${
@@ -420,7 +511,7 @@ function EventsList() {
                     <td>
                       {(() => {
                         const actions: Array<{ label: string; onClick?: () => void; to?: string; danger?: boolean }> = [];
-                        const now = new Date();
+                        const now = getCurrentEasternTime();
                         const eventStart = new Date(event.startTime);
                         const eventEnd = new Date(event.endTime);
                         const canCheckIn = isRegistered && !attendance?.checkedInAt && now >= eventStart && now <= eventEnd;
@@ -431,11 +522,13 @@ function EventsList() {
                           if (!isRegistered) {
                             const attendanceCount = attendanceCounts[event.id] || 0;
                             const isFull = event.capacity > 0 && attendanceCount >= event.capacity;
-                            actions.push({
-                              label: isFull ? 'Full' : 'Register',
-                              onClick: isFull ? undefined : () => registerForEvent(event.id),
-                              disabled: isFull,
-                            });
+                            if (!isFull) {
+                              actions.push({
+                                label: 'Register',
+                                onClick: () => registerForEvent(event.id),
+                              });
+                            }
+                            // Note: "Full" status is shown via disabled button, not as an action
                           } else {
                             actions.push({
                               label: 'View Attendees',
@@ -447,15 +540,24 @@ function EventsList() {
                                 onClick: () => checkInForEvent(attendance.id),
                               });
                             }
-                            actions.push({
-                              label: 'Unregister',
-                              onClick: () => {
-                                if (confirm('Are you sure you want to unregister from this event?')) {
-                                  unregisterFromEvent(attendance.id);
-                                }
-                              },
-                              danger: true,
-                            });
+                            // Check if 15 minutes have passed since event start
+                            const eventStartTime = attendance.event ? new Date(attendance.event.startTime) : null;
+                            const now = getCurrentEasternTime();
+                            const canDeregister = eventStartTime 
+                              ? now < new Date(eventStartTime.getTime() + 15 * 60 * 1000) // 15 minutes after start
+                              : true; // If no event data, allow (backend will validate)
+                            
+                            if (canDeregister) {
+                              actions.push({
+                                label: 'Unregister',
+                                onClick: () => {
+                                  if (confirm('Are you sure you want to unregister from this event?')) {
+                                    unregisterFromEvent(attendance.id);
+                                  }
+                                },
+                                danger: true,
+                              });
+                            }
                           }
                         }
 
@@ -483,8 +585,8 @@ function EventsList() {
                         // Render dropdown with check-in badge if applicable
                         return (
                           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                            {isCheckedIn && (
-                              <span className="badge badge-success" title={`Checked in: ${new Date(attendance.checkedInAt).toLocaleString()}`}>
+                            {isCheckedIn && attendance.checkedInAt && (
+                              <span className="badge badge-success" title={`Checked in: ${formatFullDate(attendance.checkedInAt)}`}>
                                 ✓ Checked In
                               </span>
                             )}

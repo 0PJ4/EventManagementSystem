@@ -19,13 +19,17 @@ export class EventsController {
   }
 
   @Get()
-  findAll(@Query('organizationId') organizationId?: string, @Request() req?) {
+  findAll(
+    @Query('organizationId') organizationId?: string,
+    @Query('search') search?: string,
+    @Request() req?,
+  ) {
     // Filter events based on user role
     const userRole = req.user.role;
     const userOrgId = req.user.organizationId;
     const userId = req.user.id;
     
-    return this.eventsService.findAll(organizationId, userRole, userOrgId, userId);
+    return this.eventsService.findAll(organizationId, userRole, userOrgId, userId, search);
   }
 
   @Get(':id')

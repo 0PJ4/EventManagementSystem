@@ -162,6 +162,24 @@ export class AttendancesService {
   }
 
   async remove(id: string): Promise<void> {
+    const attendance = await this.attendanceRepository.findOne({
+      where: { id },
+      relations: ['event'],
+    });
+
+    if (!attendance) {
+      throw new NotFoundException(`Attendance with ID ${id} not found`);
+    }
+
+    // Check if 15 minutes have passed since event start
+    const now = new Date();
+    const eventStartTime = new Date(attendance.event.startTime);
+    const deregistrationDeadline = new Date(eventStartTime.getTime() + 15 * 60 * 1000); // 15 minutes after start
+
+    if (now >= deregistrationDeadline) {
+      throw new BadRequestException('Cannot deregister 15 minutes after the event has started');
+    }
+
     await this.attendanceRepository.delete(id);
   }
 }

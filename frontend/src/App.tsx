@@ -9,7 +9,6 @@ import EventsList from './components/EventsList';
 import EventForm from './components/EventForm';
 import ResourcesList from './components/ResourcesList';
 import ResourceAllocation from './components/ResourceAllocation';
-import AttendeeRegistration from './components/AttendeeRegistration';
 import ReportsDashboard from './components/ReportsDashboard';
 import InvitesManagement from './components/InvitesManagement';
 import MyInvites from './components/MyInvites';

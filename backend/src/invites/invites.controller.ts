@@ -39,13 +39,14 @@ export class InvitesController {
     @Query('eventId') eventId?: string,
     @Query('organizationId') organizationId?: string,
     @Query('userId') userId?: string,
+    @Query('search') search?: string,
   ) {
     const userRole = req.user.role;
     const currentUserId = req.user.id;
     
     // Regular users can only see their own invites
     if (userRole === UserRole.USER) {
-      return this.invitesService.findAll(eventId, organizationId, currentUserId);
+      return this.invitesService.findAll(eventId, organizationId, currentUserId, search);
     }
     
     // For org admins, automatically filter by their organization if no organizationId is provided
@@ -54,7 +55,7 @@ export class InvitesController {
       : organizationId;
     
     // Admin and org admins can filter by userId or see all
-    return this.invitesService.findAll(eventId, finalOrganizationId, userId);
+    return this.invitesService.findAll(eventId, finalOrganizationId, userId, search);
   }
 
   // Get my invites - endpoint for users to see their pending invites

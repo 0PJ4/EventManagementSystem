@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, ILike } from 'typeorm';
 import { Organization } from '../entities/organization.entity';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
@@ -17,7 +17,12 @@ export class OrganizationsService {
     return this.organizationRepository.save(organization);
   }
 
-  async findAll(): Promise<Organization[]> {
+  async findAll(search?: string): Promise<Organization[]> {
+    if (search && search.trim()) {
+      return this.organizationRepository.find({
+        where: { name: ILike(`%${search.trim()}%`) },
+      });
+    }
     return this.organizationRepository.find();
   }
 

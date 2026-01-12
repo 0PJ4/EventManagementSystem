@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Brackets } from 'typeorm';
 import { ResourceAllocation } from '../entities/resource-allocation.entity';
 import { Resource, ResourceType } from '../entities/resource.entity';
 import { Event } from '../entities/event.entity';
@@ -131,19 +131,35 @@ export class AllocationsService {
     }
   }
 
-  async findAll(eventId?: string, resourceId?: string): Promise<ResourceAllocation[]> {
-    const where: any = {};
+  async findAll(eventId?: string, resourceId?: string, search?: string): Promise<ResourceAllocation[]> {
+    const queryBuilder = this.allocationRepository
+      .createQueryBuilder('allocation')
+      .leftJoinAndSelect('allocation.event', 'event')
+      .leftJoinAndSelect('allocation.resource', 'resource');
+
+    // Apply eventId filter
     if (eventId) {
-      where.eventId = eventId;
+      queryBuilder.andWhere('allocation.eventId = :eventId', { eventId });
     }
+
+    // Apply resourceId filter
     if (resourceId) {
-      where.resourceId = resourceId;
+      queryBuilder.andWhere('allocation.resourceId = :resourceId', { resourceId });
     }
-    return this.allocationRepository.find({
-      where,
-      relations: ['event', 'resource'],
-      order: { allocatedAt: 'DESC' },
-    });
+
+    // Apply search filter (event.title OR resource.name)
+    if (search && search.trim()) {
+      queryBuilder.andWhere(
+        new Brackets((qb) => {
+          qb.where('event.title ILIKE :search', { search: `%${search.trim()}%` })
+            .orWhere('resource.name ILIKE :search', { search: `%${search.trim()}%` });
+        })
+      );
+    }
+
+    return queryBuilder
+      .orderBy('allocation.allocatedAt', 'DESC')
+      .getMany();
   }
 
   async update(id: string, updateAllocationDto: UpdateAllocationDto): Promise<ResourceAllocation> {

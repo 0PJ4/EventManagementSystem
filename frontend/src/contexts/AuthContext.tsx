@@ -68,7 +68,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(user);
   };
 
-  const register = async (email: string, password: string, name: string, role: string, organizationId?: string) => {
+  const register = async (email: string, password: string, name: string, _role: string, organizationId?: string) => {
     // role is ignored - backend always creates 'user' role
     const response = await api.post('/auth/register', {
       email,

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import '../App.css';
 import {
   BarChart,
@@ -101,7 +102,7 @@ function ReportsDashboard() {
     } catch (error: any) {
       console.error('Failed to load resource utilization:', error);
       const errorMessage = error.response?.data?.message || error.message || 'Failed to load resource utilization';
-      alert(errorMessage);
+      toast.error(errorMessage);
       setResourceUtilization([]); // Set empty array on error
     } finally {
       setLoading(false);

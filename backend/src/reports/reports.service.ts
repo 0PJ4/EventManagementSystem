@@ -150,70 +150,30 @@ export class ReportsService {
         organizationId = undefined;
       }
 
-      let orgFilter = '';
-      let orgFilterCTE = '';
+      let whereClause = '';
       const params: any[] = [];
       
       if (organizationId) {
-        orgFilter = `AND o.id = $1`;
-        orgFilterCTE = `AND r."organizationId" = $1`;
+        whereClause = 'WHERE organization_id = $1';
         params.push(organizationId);
       }
 
+      // Use the materialized view for better performance
       const query = `
-        WITH resource_hours AS (
-          SELECT 
-            r.id as resource_id,
-            SUM(EXTRACT(EPOCH FROM (e."endTime" - e."startTime")) / 3600) as total_hours
-          FROM resources r
-          INNER JOIN resource_allocations ra ON ra."resourceId" = r.id
-          INNER JOIN events e ON ra."eventId" = e.id
-          WHERE 1=1 ${orgFilterCTE}
-          GROUP BY r.id
-        ),
-        resource_peak_usage AS (
-          SELECT 
-            r.id as resource_id,
-            MAX(timepoint_concurrent.total) as peak_concurrent
-          FROM resources r
-          INNER JOIN resource_allocations ra ON ra."resourceId" = r.id
-          INNER JOIN events e ON ra."eventId" = e.id
-          WHERE 1=1 ${orgFilterCTE}
-          CROSS JOIN LATERAL (
-            SELECT 
-              SUM(ra2.quantity) as total
-            FROM resource_allocations ra2
-            INNER JOIN events e2 ON ra2."eventId" = e2.id
-            WHERE ra2."resourceId" = r.id
-              AND (e2."startTime" <= e."startTime" AND e2."endTime" > e."startTime")
-          ) timepoint_concurrent
-          GROUP BY r.id
-        )
         SELECT 
-          o.id as organization_id,
-          o.name as organization_name,
-          r.id as resource_id,
-          r.name as resource_name,
-          r.type as resource_type,
-          COALESCE(CAST(rh.total_hours AS NUMERIC), 0) as total_hours_used,
-          COALESCE(CAST(rpu.peak_concurrent AS NUMERIC), 0) as peak_concurrent_usage,
-          r."availableQuantity" as available_quantity,
-          CASE 
-            WHEN r.type = 'shareable' AND r."maxConcurrentUsage" IS NOT NULL 
-            THEN r."maxConcurrentUsage" 
-            ELSE r."availableQuantity" 
-          END as max_capacity,
-          CASE 
-            WHEN COALESCE(rh.total_hours, 0) < 10 
-            THEN true 
-            ELSE false 
-          END as is_underutilized
-        FROM organizations o
-        LEFT JOIN resources r ON r."organizationId" = o.id
-        LEFT JOIN resource_hours rh ON rh.resource_id = r.id
-        LEFT JOIN resource_peak_usage rpu ON rpu.resource_id = r.id
-        WHERE r.id IS NOT NULL ${orgFilter}
-        ORDER BY o.name, r.name;
+          organization_id,
+          organization_name,
+          resource_id,
+          resource_name,
+          resource_type,
+          total_hours_used,
+          peak_concurrent_usage,
+          "availableQuantity" as available_quantity,
+          max_capacity,
+          is_underutilized
+        FROM resource_utilization_summary
+        ${whereClause}
+        ORDER BY organization_name, resource_name;
       `;
 
       return await this.dataSource.query(query, params);
@@ -331,8 +291,14 @@ export class ReportsService {
    * Helper: Refresh materialized view for resource utilization
    */
   async refreshResourceUtilizationView(): Promise<void> {
-    const query = `REFRESH MATERIALIZED VIEW CONCURRENTLY IF EXISTS resource_utilization_summary;`;
-    await this.dataSource.query(query);
+    try {
+      // Use the function created in the migration for safer refresh
+      await this.dataSource.query(`SELECT refresh_resource_utilization_summary();`);
+    } catch (error) {
+      console.error('Error refreshing resource utilization view:', error);
+      // Fallback to direct refresh if function doesn't exist
+      await this.dataSource.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY resource_utilization_summary;`);
+    }
   }
 
   /**

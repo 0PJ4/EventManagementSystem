@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import '../App.css';
 
 interface Event {
@@ -38,11 +39,11 @@ interface AvailabilityInfo {
 
 function ResourceAllocation() {
   const { user, isAdmin } = useAuth();
-  const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [allAllocations, setAllAllocations] = useState<Allocation[]>([]); // Store all allocations from API
   const [events, setEvents] = useState<Event[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedResourceFilter, setSelectedResourceFilter] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState<string>('');
   const [formData, setFormData] = useState({
     eventId: '',
     resourceId: '',
@@ -63,25 +64,40 @@ function ResourceAllocation() {
 
   const loadData = async () => {
     try {
+      setLoading(true);
       const params: any = {};
       if (!isAdmin && user?.organizationId) {
         params.organizationId = user.organizationId;
       }
+      
       const [allocationsRes, eventsRes, resourcesRes] = await Promise.all([
         api.get('/allocations'),
         api.get('/events', { params }),
         api.get('/resources', { params }),
       ]);
-      setAllocations(allocationsRes.data);
-      setEvents(eventsRes.data);
-      setResources(resourcesRes.data);
+      setAllAllocations(allocationsRes.data || []);
+      setEvents(eventsRes.data || []);
+      setResources(resourcesRes.data || []);
     } catch (error) {
       console.error('Failed to load data:', error);
-      alert('Failed to load data');
+      toast.error('Failed to load data');
     } finally {
       setLoading(false);
     }
   };
+
+  // Client-side filtering with useMemo for performance
+  const allocations = useMemo(() => {
+    if (!searchTerm.trim()) {
+      return allAllocations;
+    }
+    
+    const searchLower = searchTerm.toLowerCase().trim();
+    return allAllocations.filter((alloc: Allocation) => 
+      alloc.event?.title?.toLowerCase().includes(searchLower) ||
+      alloc.resource?.name?.toLowerCase().includes(searchLower)
+    );
+  }, [allAllocations, searchTerm]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,9 +106,10 @@ function ResourceAllocation() {
       setFormData({ eventId: '', resourceId: '', quantity: 1 });
       setShowForm(false);
       loadData();
+      toast.success('Resource allocated successfully');
     } catch (error: any) {
       console.error('Failed to allocate resource:', error);
-      alert(error.response?.data?.message || 'Failed to allocate resource');
+      toast.error(error.response?.data?.message || 'Failed to allocate resource');
     }
   };
 
@@ -135,9 +152,10 @@ function ResourceAllocation() {
       await api.patch(`/allocations/${id}`, { quantity: editQuantity });
       handleCancelEdit();
       loadData();
+      toast.success('Allocation updated successfully');
     } catch (error: any) {
       console.error('Failed to update allocation:', error);
-      alert(error.response?.data?.message || 'Failed to update allocation');
+      toast.error(error.response?.data?.message || 'Failed to update allocation');
     }
   };
 
@@ -146,9 +164,10 @@ function ResourceAllocation() {
     try {
       await api.delete(`/allocations/${id}`);
       loadData();
+      toast.success('Allocation deleted successfully');
     } catch (error) {
       console.error('Failed to delete allocation:', error);
-      alert('Failed to delete allocation');
+      toast.error('Failed to delete allocation');
     }
   };
 
@@ -166,35 +185,63 @@ function ResourceAllocation() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
           <h2>Resource Allocations</h2>
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <label htmlFor="resourceFilter" style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--gray-700)' }}>
-                Filter by Resource:
-              </label>
-              <select
-                id="resourceFilter"
-                value={selectedResourceFilter}
-                onChange={(e) => setSelectedResourceFilter(e.target.value)}
-                style={{
-                  padding: '0.5rem',
-                  border: '1px solid var(--gray-300)',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: '0.875rem',
-                  minWidth: '200px',
-                }}
-              >
-                <option value="">All Resources</option>
-                {resources
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((resource) => (
-                    <option key={resource.id} value={resource.id}>
-                      {resource.name} ({resource.type})
-                    </option>
-                  ))}
-              </select>
-            </div>
             <button onClick={() => setShowForm(!showForm)} className="btn btn-primary">
               {showForm ? 'Cancel' : 'Allocate Resource'}
             </button>
+          </div>
+        </div>
+
+        {/* Search Input */}
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div style={{ position: 'relative', width: '100%' }}>
+            <svg
+              style={{
+                position: 'absolute',
+                left: '0.875rem',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: '20px',
+                height: '20px',
+                color: 'var(--gray-400)',
+                pointerEvents: 'none',
+                zIndex: 1
+              }}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="8"></circle>
+              <path d="m21 21-4.35-4.35"></path>
+            </svg>
+            <input
+              type="text"
+              placeholder="Search by resource name or event title..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.75rem 1rem 0.75rem 2.75rem',
+                fontSize: '0.9375rem',
+                lineHeight: '1.5',
+                color: 'var(--gray-900)',
+                background: 'white',
+                border: '1px solid var(--gray-300)',
+                borderRadius: 'var(--radius-md)',
+                transition: 'all 0.2s ease',
+                boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = 'var(--primary-500)';
+                e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = 'var(--gray-300)';
+                e.target.style.boxShadow = '0 1px 2px 0 rgba(0, 0, 0, 0.05)';
+              }}
+            />
           </div>
         </div>
 
@@ -291,10 +338,6 @@ function ResourceAllocation() {
             const allocationsWithData = allocations
               .filter((alloc) => {
                 const event = events.find((e) => e.id === alloc.eventId);
-                // Apply resource filter if selected
-                if (selectedResourceFilter && alloc.resourceId !== selectedResourceFilter) {
-                  return false;
-                }
                 return event && event.id;
               })
               .map((allocation) => {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import { formatEventDateTime, formatTableDate } from '../utils/dateFormatter';
 import '../App.css';
 
 interface Invite {
@@ -20,7 +20,6 @@ interface Invite {
 }
 
 function MyInvites() {
-  const { user } = useAuth();
   const [invites, setInvites] = useState<Invite[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -134,7 +133,7 @@ function MyInvites() {
                                 Start Time
                               </div>
                               <div style={{ fontWeight: 600, color: 'var(--gray-900)' }}>
-                                {new Date(invite.event.startTime).toLocaleString()}
+                                {formatEventDateTime(invite.event.startTime)}
                               </div>
                             </div>
                             <div>
@@ -142,7 +141,7 @@ function MyInvites() {
                                 End Time
                               </div>
                               <div style={{ fontWeight: 600, color: 'var(--gray-900)' }}>
-                                {new Date(invite.event.endTime).toLocaleString()}
+                                {formatEventDateTime(invite.event.endTime)}
                               </div>
                             </div>
                           </div>
@@ -192,7 +191,7 @@ function MyInvites() {
                         <tr key={invite.id}>
                           <td style={{ fontWeight: 600 }}>{invite.event.title}</td>
                           <td>{invite.invitedByOrganization.name}</td>
-                          <td>{new Date(invite.event.startTime).toLocaleString()}</td>
+                          <td>{formatTableDate(invite.event.startTime)}</td>
                           <td>
                             <span className={`badge badge-${
                               invite.status === 'accepted' ? 'success' :
@@ -202,7 +201,7 @@ function MyInvites() {
                               {invite.status.charAt(0).toUpperCase() + invite.status.slice(1)}
                             </span>
                           </td>
-                          <td>{new Date(invite.createdAt).toLocaleDateString()}</td>
+                          <td>{formatTableDate(invite.createdAt)}</td>
                         </tr>
                       ))}
                     </tbody>
