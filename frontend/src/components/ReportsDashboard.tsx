@@ -46,7 +46,6 @@ function ReportsDashboard() {
   const [resourceUtilization, setResourceUtilization] = useState<any[]>([]);
   const [parentChildViolations, setParentChildViolations] = useState<any[]>([]);
   const [externalAttendees, setExternalAttendees] = useState<any[]>([]);
-  const [capacityUtilization, setCapacityUtilization] = useState<any[]>([]);
   const [showUpRate, setShowUpRate] = useState<any[]>([]);
   const [threshold, setThreshold] = useState(10);
 
@@ -61,8 +60,6 @@ function ReportsDashboard() {
       loadParentChildViolations();
     } else if (activeTab === 'external-attendees') {
       loadExternalAttendees();
-    } else if (activeTab === 'capacity-utilization') {
-      loadCapacityUtilization();
     } else if (activeTab === 'show-up-rate') {
       loadShowUpRate();
     }
@@ -100,10 +97,12 @@ function ReportsDashboard() {
         params.organizationId = user.organizationId;
       }
       const response = await api.get('/reports/resource-utilization', { params });
-      setResourceUtilization(response.data);
-    } catch (error) {
+      setResourceUtilization(response.data || []);
+    } catch (error: any) {
       console.error('Failed to load resource utilization:', error);
-      alert('Failed to load resource utilization');
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to load resource utilization';
+      alert(errorMessage);
+      setResourceUtilization([]); // Set empty array on error
     } finally {
       setLoading(false);
     }
@@ -135,22 +134,6 @@ function ReportsDashboard() {
     }
   };
 
-  const loadCapacityUtilization = async () => {
-    setLoading(true);
-    try {
-      const params: any = {};
-      if (!isAdmin && user?.organizationId) {
-        params.organizationId = user.organizationId;
-      }
-      const response = await api.get('/reports/capacity-utilization', { params });
-      setCapacityUtilization(response.data);
-    } catch (error) {
-      console.error('Failed to load capacity utilization:', error);
-      alert('Failed to load capacity utilization');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const loadShowUpRate = async () => {
     setLoading(true);
@@ -169,23 +152,6 @@ function ReportsDashboard() {
     }
   };
 
-  // Prepare chart data
-  const prepareCapacityChartData = () => {
-    return capacityUtilization
-      .slice()
-      .sort((a, b) => parseFloat(b.utilization_percentage || 0) - parseFloat(a.utilization_percentage || 0))
-      .slice(0, 15)
-      .map((item, index) => ({
-        name: `${index + 1}. ${truncateText(item.title || item.event_title || 'Unknown', 25)}`,
-        fullName: item.title || item.event_title || 'Unknown',
-        utilization: parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0),
-        capacity: item.capacity,
-        attendance: item.attendance_count || item.registered_attendees || 0,
-        status: item.fill_status || (parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) > 100 ? 'Over-filled' : 
-               parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) >= 80 ? 'Well-filled' : 
-               parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) >= 50 ? 'Moderately-filled' : 'Under-filled'),
-      }));
-  };
 
   const prepareShowUpRateChartData = () => {
     return showUpRate
@@ -203,16 +169,25 @@ function ReportsDashboard() {
   };
 
   const prepareResourceUtilizationChartData = () => {
+    if (!resourceUtilization || resourceUtilization.length === 0) {
+      return [];
+    }
+    
     return resourceUtilization
+      .filter(item => item && item.resource_name) // Filter out invalid items
       .slice()
-      .sort((a, b) => parseFloat(b.total_hours_used || 0) - parseFloat(a.total_hours_used || 0))
+      .sort((a, b) => {
+        const hoursA = parseFloat(String(a.total_hours_used || 0));
+        const hoursB = parseFloat(String(b.total_hours_used || 0));
+        return hoursB - hoursA;
+      })
       .slice(0, 15)
       .map((item, index) => ({
         name: `${index + 1}. ${truncateText(item.resource_name || 'Unknown', 20)}`,
         fullName: item.resource_name || 'Unknown',
-        hoursUsed: parseFloat(item.total_hours_used || 0),
-        peakConcurrent: item.peak_concurrent_usage || 0,
-        maxCapacity: item.max_capacity || 0,
+        hoursUsed: parseFloat(String(item.total_hours_used || 0)),
+        peakConcurrent: parseFloat(String(item.peak_concurrent_usage || 0)),
+        maxCapacity: parseFloat(String(item.max_capacity || 0)),
       }));
   };
 
@@ -260,21 +235,35 @@ function ReportsDashboard() {
       }));
   };
 
-  const prepareDoubleBookedChartData = () => {
-    const userCounts = doubleBookedUsers.reduce((acc: any, item: any) => {
-      const email = item.email || 'Unknown';
-      acc[email] = (acc[email] || 0) + 1;
-      return acc;
-    }, {});
+  // Group double-booked users by user
+  const groupDoubleBookedByUser = () => {
+    const grouped: Record<string, Array<{ event1_title: string; event1_start: string; event1_end: string; event2_title: string; event2_start: string; event2_end: string }>> = {};
+    
+    doubleBookedUsers.forEach((item) => {
+      const key = `${item.user_id}_${item.email}`;
+      if (!grouped[key]) {
+        grouped[key] = [];
+      }
+      grouped[key].push({
+        event1_title: item.event1_title,
+        event1_start: item.event1_start,
+        event1_end: item.event1_end,
+        event2_title: item.event2_title,
+        event2_start: item.event2_start,
+        event2_end: item.event2_end,
+      });
+    });
 
-    return Object.entries(userCounts)
-      .map(([name, count], index) => ({
-        name: `${index + 1}. ${truncateText(name, 20)}`,
-        fullName: name,
-        count: count as number,
-      }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
+    return Object.entries(grouped).map(([key, conflicts]) => {
+      const [userId, email] = key.split('_');
+      const firstItem = doubleBookedUsers.find(item => item.user_id === userId && item.email === email);
+      return {
+        user_id: userId,
+        name: firstItem?.name || 'Unknown',
+        email: email,
+        conflicts,
+      };
+    });
   };
 
   const tabs = [
@@ -283,7 +272,6 @@ function ReportsDashboard() {
     { id: 'resource-utilization', label: 'Resource Utilization', icon: '📊' },
     { id: 'parent-child-violations', label: 'Event Hierarchy', icon: '🔗' },
     { id: 'external-attendees', label: 'External Attendees', icon: '👥' },
-    { id: 'capacity-utilization', label: 'Event Performance Analytics', icon: '📈' },
     { id: 'show-up-rate', label: 'Engagement & Conversion Analytics', icon: '✅' },
   ];
 
@@ -367,58 +355,49 @@ function ReportsDashboard() {
               <p>No users are double-booked for overlapping events.</p>
             </div>
           ) : (
-            <>
-              {prepareDoubleBookedChartData().length > 0 && (
-                <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-                  <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
-                    Double-Booking Count by User
-                  </h3>
-                  <ResponsiveContainer width="100%" height={400}>
-                    <BarChart data={prepareDoubleBookedChartData()} margin={{ top: 20, right: 30, left: 20, bottom: 80 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis 
-                        dataKey="name" 
-                        angle={-45} 
-                        textAnchor="end" 
-                        height={120}
-                        stroke="#6b7280"
-                        tick={{ fontSize: 12 }}
-                        interval={0}
-                      />
-                      <YAxis stroke="#6b7280" tick={{ fontSize: 12 }} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Bar dataKey="count" fill={CHART_COLORS.danger} radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-              <div className="table-container">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>User Name</th>
-                      <th>Email</th>
-                      <th>Event 1</th>
-                      <th>Event 1 Time</th>
-                      <th>Event 2</th>
-                      <th>Event 2 Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {doubleBookedUsers.map((item, idx) => (
-                      <tr key={idx}>
-                        <td style={{ fontWeight: 600 }}>{item.name}</td>
-                        <td>{item.email}</td>
-                        <td>{item.event1_title}</td>
-                        <td>{new Date(item.event1_start).toLocaleString()}</td>
-                        <td>{item.event2_title}</td>
-                        <td>{new Date(item.event2_start).toLocaleString()}</td>
+            <div className="table-container">
+              {groupDoubleBookedByUser().map((userGroup, groupIdx) => (
+                <div key={groupIdx} style={{ marginBottom: '2rem' }}>
+                  <div style={{
+                    background: 'var(--gray-50)',
+                    padding: '1rem 1.25rem',
+                    borderBottom: '2px solid var(--gray-300)',
+                    marginBottom: '0.5rem',
+                  }}>
+                    <h3 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600, color: 'var(--gray-900)' }}>
+                      {userGroup.name}
+                    </h3>
+                    <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: 'var(--gray-600)' }}>
+                      {userGroup.email}
+                    </p>
+                  </div>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Event A</th>
+                        <th>Event A Time</th>
+                        <th>Event B</th>
+                        <th>Event B Time</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
+                    </thead>
+                    <tbody>
+                      {userGroup.conflicts.map((conflict, conflictIdx) => (
+                        <tr key={conflictIdx}>
+                          <td style={{ fontWeight: 600 }}>{conflict.event1_title}</td>
+                          <td>
+                            {new Date(conflict.event1_start).toLocaleString()} - {new Date(conflict.event1_end).toLocaleString()}
+                          </td>
+                          <td style={{ fontWeight: 600 }}>{conflict.event2_title}</td>
+                          <td>
+                            {new Date(conflict.event2_start).toLocaleString()} - {new Date(conflict.event2_end).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
           )}
         </>
       )}
@@ -537,12 +516,13 @@ function ReportsDashboard() {
             </div>
           ) : (
             <>
-              <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
-                  Resource Utilization Overview
-                </h3>
-                <ResponsiveContainer width="100%" height={450}>
-                  <ComposedChart data={prepareResourceUtilizationChartData()} margin={{ top: 20, right: 30, left: 20, bottom: 100 }}>
+              {prepareResourceUtilizationChartData().length > 0 && (
+                <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
+                    Resource Utilization Overview
+                  </h3>
+                  <ResponsiveContainer width="100%" height={450}>
+                    <ComposedChart data={prepareResourceUtilizationChartData()} margin={{ top: 20, right: 30, left: 20, bottom: 100 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis 
                       dataKey="name" 
@@ -557,11 +537,12 @@ function ReportsDashboard() {
                     <YAxis yAxisId="right" orientation="right" stroke="#6b7280" tick={{ fontSize: 12 }} label={{ value: 'Peak Concurrent', angle: 90, position: 'insideRight', style: { textAnchor: 'middle' } }} />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                    <Bar yAxisId="left" dataKey="hoursUsed" fill={CHART_COLORS.primary} name="Total Hours Used" radius={[4, 4, 0, 0]} />
-                    <Line yAxisId="right" type="monotone" dataKey="peakConcurrent" stroke={CHART_COLORS.warning} strokeWidth={2} name="Peak Concurrent" dot={{ fill: CHART_COLORS.warning, r: 4 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+                      <Bar yAxisId="left" dataKey="hoursUsed" fill={CHART_COLORS.primary} name="Total Hours Used" radius={[4, 4, 0, 0]} />
+                      <Line yAxisId="right" type="monotone" dataKey="peakConcurrent" stroke={CHART_COLORS.warning} strokeWidth={2} name="Peak Concurrent" dot={{ fill: CHART_COLORS.warning, r: 4 }} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
               <div className="table-container">
                 <table>
                   <thead>
@@ -589,9 +570,9 @@ function ReportsDashboard() {
                             {item.resource_type}
                           </span>
                         </td>
-                        <td>{parseFloat(item.total_hours_used || 0).toFixed(2)} hrs</td>
-                        <td>{item.peak_concurrent_usage || 0}</td>
-                        <td>{item.max_capacity || 0}</td>
+                        <td>{parseFloat(String(item.total_hours_used || 0)).toFixed(2)} hrs</td>
+                        <td>{parseFloat(String(item.peak_concurrent_usage || 0))}</td>
+                        <td>{parseFloat(String(item.max_capacity || 0))}</td>
                         <td>
                           {item.is_underutilized ? (
                             <span className="badge badge-warning">Underutilized</span>
@@ -752,127 +733,6 @@ function ReportsDashboard() {
                         <td>
                           <span className="badge badge-warning" style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}>
                             {item.external_attendee_count}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </>
-      )}
-
-      {/* Capacity Utilization Report */}
-      {activeTab === 'capacity-utilization' && !loading && (
-        <>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1rem', color: 'var(--gray-900)' }}>
-            📈 Event Performance Analytics - Capacity Utilization
-          </h2>
-          <p style={{ color: 'var(--gray-600)', marginBottom: '1.5rem' }}>
-            Percentage of event capacity filled. Identifies which events are consistently over or under-filled.
-          </p>
-          {capacityUtilization.length === 0 ? (
-            <div className="empty-state">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
-                <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
-              </svg>
-              <h3>No Data Available</h3>
-              <p>No capacity utilization data found.</p>
-            </div>
-          ) : (
-            <>
-              <div style={{ marginBottom: '2rem', backgroundColor: 'white', padding: '1.5rem', borderRadius: '0.5rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--gray-900)' }}>
-                  Capacity Utilization by Event (Top 15)
-                </h3>
-                <ResponsiveContainer width="100%" height={550}>
-                  <BarChart data={prepareCapacityChartData()} layout="vertical" margin={{ top: 20, right: 30, left: 180, bottom: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis type="number" domain={[0, 'dataMax + 10']} stroke="#6b7280" tick={{ fontSize: 12 }} label={{ value: 'Utilization %', position: 'insideBottom', offset: -5, style: { textAnchor: 'middle' } }} />
-                    <YAxis 
-                      dataKey="name" 
-                      type="category" 
-                      width={170}
-                      stroke="#6b7280"
-                      tick={{ fontSize: 11 }}
-                      interval={0}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                    <Bar dataKey="utilization" fill={CHART_COLORS.primary} name="Utilization %" radius={[0, 4, 4, 0]}>
-                      {prepareCapacityChartData().map((entry, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={
-                            entry.utilization > 100
-                              ? CHART_COLORS.danger
-                              : entry.utilization >= 80
-                              ? CHART_COLORS.success
-                              : entry.utilization >= 50
-                              ? CHART_COLORS.info
-                              : CHART_COLORS.warning
-                          }
-                        />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="table-container">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Event</th>
-                      <th>Organization</th>
-                      <th>Start Time</th>
-                      <th>End Time</th>
-                      <th>Capacity</th>
-                      <th>Attendance Count</th>
-                      <th>Utilization %</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {capacityUtilization.map((item, idx) => (
-                      <tr key={idx}>
-                        <td style={{ fontWeight: 600 }}>{item.title || item.event_title}</td>
-                        <td>{item.organization_name}</td>
-                        <td>{new Date(item.start_time || item.startTime).toLocaleString()}</td>
-                        <td>{new Date(item.end_time || item.endTime).toLocaleString()}</td>
-                        <td>{item.capacity}</td>
-                        <td>{item.attendance_count || item.registered_attendees || 0}</td>
-                        <td>
-                          <span
-                            className={`badge ${
-                              parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) > 100
-                                ? 'badge-danger'
-                                : parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) >= 80
-                                ? 'badge-success'
-                                : parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0) >= 50
-                                ? 'badge-info'
-                                : 'badge-warning'
-                            }`}
-                            style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}
-                          >
-                            {parseFloat(item.utilization_percentage || item.capacity_utilization_percentage || 0).toFixed(2)}%
-                          </span>
-                        </td>
-                        <td>
-                          <span
-                            className={`badge ${
-                              item.fill_status === 'Over-filled'
-                                ? 'badge-danger'
-                                : item.fill_status === 'Well-filled'
-                                ? 'badge-success'
-                                : item.fill_status === 'Moderately-filled'
-                                ? 'badge-info'
-                                : 'badge-warning'
-                            }`}
-                          >
-                            {item.fill_status}
                           </span>
                         </td>
                       </tr>

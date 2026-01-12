@@ -124,13 +124,14 @@ export class AttendancesService {
       throw new NotFoundException(`Attendance with ID ${attendanceId} not found`);
     }
 
-    // Check if check-in is allowed (only during event time: between startTime and endTime)
+    // Check if check-in is allowed (15 minutes before event start until event end)
     const now = new Date();
     const eventStartTime = new Date(attendance.event.startTime);
     const eventEndTime = new Date(attendance.event.endTime);
+    const checkInStartTime = new Date(eventStartTime.getTime() - 15 * 60 * 1000); // 15 minutes before
 
-    if (now < eventStartTime) {
-      throw new BadRequestException('Check-in is only available once the event starts');
+    if (now < checkInStartTime) {
+      throw new BadRequestException('Check-in is only available 15 minutes before the event starts');
     }
 
     if (now > eventEndTime) {

@@ -10,7 +10,12 @@ export class ReportsService {
    * a. Find all users who are double-booked
    * Users are double-booked if they have attendance records for overlapping events
    */
-  async findDoubleBookedUsers(): Promise<any[]> {
+  async findDoubleBookedUsers(organizationId?: string): Promise<any[]> {
+    let orgFilter = '';
+    if (organizationId) {
+      orgFilter = `AND (e1."organizationId" = $1 OR e2."organizationId" = $1)`;
+    }
+
     const query = `
       SELECT DISTINCT
         u.id as user_id,
@@ -31,16 +36,25 @@ export class ReportsService {
       INNER JOIN users u ON a1."userId" = u.id
       WHERE a1."userId" IS NOT NULL
         AND (e1."startTime" < e2."endTime" AND e1."endTime" > e2."startTime")
+        ${orgFilter}
       ORDER BY u.email, e1."startTime";
     `;
 
+    if (organizationId) {
+      return this.dataSource.query(query, [organizationId]);
+    }
     return this.dataSource.query(query);
   }
 
   /**
    * b. List all events that violate resource constraints
    */
-  async findEventsWithViolatedConstraints(): Promise<any[]> {
+  async findEventsWithViolatedConstraints(organizationId?: string): Promise<any[]> {
+    let orgFilter = '';
+    if (organizationId) {
+      orgFilter = `AND e1."organizationId" = $1`;
+    }
+
     const query = `
       WITH resource_violations AS (
         -- Exclusive resources double-booked
@@ -61,6 +75,7 @@ export class ReportsService {
         INNER JOIN events e2 ON ra2."eventId" = e2.id
         WHERE r.type = 'exclusive'
           AND (e1."startTime" < e2."endTime" AND e1."endTime" > e2."startTime")
+          ${orgFilter}
         
         UNION ALL
         
@@ -78,12 +93,14 @@ export class ReportsService {
         INNER JOIN events e ON ra."eventId" = e.id
         WHERE r.type = 'shareable'
           AND r."maxConcurrentUsage" IS NOT NULL
+          ${organizationId ? `AND e."organizationId" = $1` : ''}
           AND EXISTS (
             SELECT 1
             FROM resource_allocations ra2
             INNER JOIN events e2 ON ra2."eventId" = e2.id
             WHERE ra2."resourceId" = ra."resourceId"
               AND (e2."startTime" < e."endTime" AND e2."endTime" > e."startTime")
+              ${organizationId ? `AND e2."organizationId" = $1` : ''}
             GROUP BY ra2."resourceId"
             HAVING COALESCE(SUM(ra2.quantity), 0) > r."maxConcurrentUsage"
           )
@@ -103,6 +120,7 @@ export class ReportsService {
         INNER JOIN resources r ON ra."resourceId" = r.id
         INNER JOIN events e ON ra."eventId" = e.id
         WHERE r.type = 'consumable'
+          ${organizationId ? `AND e."organizationId" = $1` : ''}
           AND EXISTS (
             SELECT 1
             FROM resource_allocations ra2
@@ -116,73 +134,6 @@ export class ReportsService {
       ORDER BY start_time, resource_name;
     `;
 
-    return this.dataSource.query(query);
-  }
-
-  /**
-   * c. Compute resource utilization per organization
-   */
-  async getResourceUtilizationPerOrganization(organizationId?: string): Promise<any[]> {
-    let orgFilter = '';
-    if (organizationId) {
-      orgFilter = `WHERE o.id = $1`;
-    }
-
-    const query = `
-      WITH resource_hours AS (
-        SELECT 
-          r.id as resource_id,
-          SUM(EXTRACT(EPOCH FROM (e."endTime" - e."startTime")) / 3600) as total_hours
-        FROM resources r
-        INNER JOIN resource_allocations ra ON ra."resourceId" = r.id
-        INNER JOIN events e ON ra."eventId" = e.id
-        GROUP BY r.id
-      ),
-      resource_peak_usage AS (
-        SELECT 
-          r.id as resource_id,
-          MAX(timepoint_concurrent.total) as peak_concurrent
-        FROM resources r
-        INNER JOIN resource_allocations ra ON ra."resourceId" = r.id
-        INNER JOIN events e ON ra."eventId" = e.id
-        CROSS JOIN LATERAL (
-          SELECT 
-            SUM(ra2.quantity) as total
-          FROM resource_allocations ra2
-          INNER JOIN events e2 ON ra2."eventId" = e2.id
-          WHERE ra2."resourceId" = r.id
-            AND (e2."startTime" <= e."startTime" AND e2."endTime" > e."startTime")
-        ) timepoint_concurrent
-        GROUP BY r.id
-      )
-      SELECT 
-        o.id as organization_id,
-        o.name as organization_name,
-        r.id as resource_id,
-        r.name as resource_name,
-        r.type as resource_type,
-        COALESCE(rh.total_hours, 0) as total_hours_used,
-        COALESCE(rpu.peak_concurrent, 0) as peak_concurrent_usage,
-        r."availableQuantity" as available_quantity,
-        CASE 
-          WHEN r.type = 'shareable' AND r."maxConcurrentUsage" IS NOT NULL 
-          THEN r."maxConcurrentUsage" 
-          ELSE r."availableQuantity" 
-        END as max_capacity,
-        CASE 
-          WHEN COALESCE(rh.total_hours, 0) < 10 
-          THEN true 
-          ELSE false 
-        END as is_underutilized
-      FROM organizations o
-      LEFT JOIN resources r ON r."organizationId" = o.id
-      LEFT JOIN resource_hours rh ON rh.resource_id = r.id
-      LEFT JOIN resource_peak_usage rpu ON rpu.resource_id = r.id
-      ${orgFilter}
-      WHERE r.id IS NOT NULL
-      ORDER BY o.name, r.name;
-    `;
-
     if (organizationId) {
       return this.dataSource.query(query, [organizationId]);
     }
@@ -190,10 +141,98 @@ export class ReportsService {
   }
 
   /**
+   * c. Compute resource utilization per organization
+   */
+  async getResourceUtilizationPerOrganization(organizationId?: string): Promise<any[]> {
+    try {
+      // Validate organizationId if provided
+      if (organizationId && organizationId.trim() === '') {
+        organizationId = undefined;
+      }
+
+      let orgFilter = '';
+      let orgFilterCTE = '';
+      const params: any[] = [];
+      
+      if (organizationId) {
+        orgFilter = `AND o.id = $1`;
+        orgFilterCTE = `AND r."organizationId" = $1`;
+        params.push(organizationId);
+      }
+
+      const query = `
+        WITH resource_hours AS (
+          SELECT 
+            r.id as resource_id,
+            SUM(EXTRACT(EPOCH FROM (e."endTime" - e."startTime")) / 3600) as total_hours
+          FROM resources r
+          INNER JOIN resource_allocations ra ON ra."resourceId" = r.id
+          INNER JOIN events e ON ra."eventId" = e.id
+          WHERE 1=1 ${orgFilterCTE}
+          GROUP BY r.id
+        ),
+        resource_peak_usage AS (
+          SELECT 
+            r.id as resource_id,
+            MAX(timepoint_concurrent.total) as peak_concurrent
+          FROM resources r
+          INNER JOIN resource_allocations ra ON ra."resourceId" = r.id
+          INNER JOIN events e ON ra."eventId" = e.id
+          WHERE 1=1 ${orgFilterCTE}
+          CROSS JOIN LATERAL (
+            SELECT 
+              SUM(ra2.quantity) as total
+            FROM resource_allocations ra2
+            INNER JOIN events e2 ON ra2."eventId" = e2.id
+            WHERE ra2."resourceId" = r.id
+              AND (e2."startTime" <= e."startTime" AND e2."endTime" > e."startTime")
+          ) timepoint_concurrent
+          GROUP BY r.id
+        )
+        SELECT 
+          o.id as organization_id,
+          o.name as organization_name,
+          r.id as resource_id,
+          r.name as resource_name,
+          r.type as resource_type,
+          COALESCE(CAST(rh.total_hours AS NUMERIC), 0) as total_hours_used,
+          COALESCE(CAST(rpu.peak_concurrent AS NUMERIC), 0) as peak_concurrent_usage,
+          r."availableQuantity" as available_quantity,
+          CASE 
+            WHEN r.type = 'shareable' AND r."maxConcurrentUsage" IS NOT NULL 
+            THEN r."maxConcurrentUsage" 
+            ELSE r."availableQuantity" 
+          END as max_capacity,
+          CASE 
+            WHEN COALESCE(rh.total_hours, 0) < 10 
+            THEN true 
+            ELSE false 
+          END as is_underutilized
+        FROM organizations o
+        LEFT JOIN resources r ON r."organizationId" = o.id
+        LEFT JOIN resource_hours rh ON rh.resource_id = r.id
+        LEFT JOIN resource_peak_usage rpu ON rpu.resource_id = r.id
+        WHERE r.id IS NOT NULL ${orgFilter}
+        ORDER BY o.name, r.name;
+      `;
+
+      return await this.dataSource.query(query, params);
+    } catch (error) {
+      console.error('Error in getResourceUtilizationPerOrganization:', error);
+      throw error;
+    }
+  }
+
+  /**
    * d. Find parent events whose child sessions violate time boundaries
    * Uses recursive CTE to traverse parent-child relationships
    */
-  async findParentEventsWithInvalidChildren(): Promise<any[]> {
+  async findParentEventsWithInvalidChildren(organizationId?: string): Promise<any[]> {
+    let orgFilter = '';
+    if (organizationId) {
+      orgFilter = `AND "organizationId" = $1`;
+    }
+
     const query = `
       WITH RECURSIVE event_hierarchy AS (
         -- Base case: all events
@@ -208,6 +247,7 @@ export class ReportsService {
           0 as level
         FROM events
         WHERE "parentEventId" IS NULL
+          ${orgFilter}
         
         UNION ALL
         
@@ -223,6 +263,7 @@ export class ReportsService {
           eh.level + 1
         FROM events e
         INNER JOIN event_hierarchy eh ON e."parentEventId" = eh.id
+        ${organizationId ? `WHERE e."organizationId" = $1` : ''}
       ),
       parent_child_violations AS (
         SELECT DISTINCT
@@ -247,13 +288,23 @@ export class ReportsService {
       ORDER BY parent_start, child_start;
     `;
 
+    if (organizationId) {
+      return this.dataSource.query(query, [organizationId]);
+    }
     return this.dataSource.query(query);
   }
 
   /**
    * e. List events with external attendees exceeding a threshold
    */
-  async findEventsWithExternalAttendeesExceedingThreshold(threshold: number = 10): Promise<any[]> {
+  async findEventsWithExternalAttendeesExceedingThreshold(threshold: number = 10, organizationId?: string): Promise<any[]> {
+    let orgFilter = '';
+    const params: any[] = [threshold];
+    if (organizationId) {
+      orgFilter = `AND e."organizationId" = $2`;
+      params.push(organizationId);
+    }
+
     const query = `
       SELECT 
         e.id as event_id,
@@ -267,12 +318,13 @@ export class ReportsService {
       INNER JOIN organizations o ON e."organizationId" = o.id
       LEFT JOIN attendances a ON a."eventId" = e.id AND a."userId" IS NULL
       WHERE e."allowExternalAttendees" = true
+        ${orgFilter}
       GROUP BY e.id, e.title, e."startTime", e."endTime", e.capacity, o.name
       HAVING COUNT(a.id) >= $1
       ORDER BY external_attendee_count DESC, e."startTime";
     `;
 
-    return this.dataSource.query(query, [threshold]);
+    return this.dataSource.query(query, params);
   }
 
   /**

@@ -9,6 +9,7 @@ interface ActionsDropdownProps {
     to?: string;
     className?: string;
     danger?: boolean;
+    disabled?: boolean;
   }>;
 }
 
@@ -33,6 +34,9 @@ function ActionsDropdown({ actions }: ActionsDropdownProps) {
   }, [isOpen]);
 
   const handleAction = (action: typeof actions[0]) => {
+    if (action.disabled) {
+      return;
+    }
     if (action.onClick) {
       action.onClick();
     }
@@ -62,8 +66,9 @@ function ActionsDropdown({ actions }: ActionsDropdownProps) {
             const content = (
               <div
                 key={index}
-                className={`actions-dropdown-item ${action.danger ? 'danger' : ''} ${action.className || ''}`}
+                className={`actions-dropdown-item ${action.danger ? 'danger' : ''} ${action.disabled ? 'disabled' : ''} ${action.className || ''}`}
                 onClick={() => handleAction(action)}
+                style={action.disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
               >
                 {action.label}
               </div>

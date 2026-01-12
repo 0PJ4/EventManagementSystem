@@ -33,9 +33,12 @@ interface Attendance {
 function EventsList() {
   const { user, isAdmin, isOrg } = useAuth();
   const [events, setEvents] = useState<Event[]>([]);
+  const [allEvents, setAllEvents] = useState<Event[]>([]); // Store all events from API
   const [myAttendances, setMyAttendances] = useState<Attendance[]>([]);
+  const [attendanceCounts, setAttendanceCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'available' | 'registered' | 'ongoing' | 'past' | 'upcoming'>('available');
+  const [eventFilter, setEventFilter] = useState<'all' | 'my-org' | 'global'>('all');
   
   // Set default tab based on role after mount
   useEffect(() => {
@@ -46,7 +49,7 @@ function EventsList() {
 
   useEffect(() => {
     loadData();
-  }, [user]);
+  }, [user, eventFilter]);
 
   const loadData = async () => {
     try {
@@ -57,7 +60,18 @@ function EventsList() {
       ]);
       
       const eventsData = eventsRes.data || [];
-      setEvents(eventsData);
+      setAllEvents(eventsData);
+      
+      // Apply filter
+      let filteredEvents = eventsData;
+      if (eventFilter === 'my-org' && user?.organizationId) {
+        filteredEvents = eventsData.filter((e: Event) => e.organizationId === user.organizationId);
+      } else if (eventFilter === 'global') {
+        filteredEvents = eventsData.filter((e: Event) => 
+          e.organizationId !== user?.organizationId || e.allowExternalAttendees
+        );
+      }
+      setEvents(filteredEvents);
       
       // Filter attendances for current user and attach event details
       const allAttendances = attendancesRes.data || [];
@@ -68,6 +82,13 @@ function EventsList() {
           return { ...att, event };
         });
       setMyAttendances(userAttendances);
+
+      // Calculate attendance counts per event
+      const counts: Record<string, number> = {};
+      eventsData.forEach((event: Event) => {
+        counts[event.id] = allAttendances.filter((att: Attendance) => att.eventId === event.id).length;
+      });
+      setAttendanceCounts(counts);
     } catch (error: any) {
       console.error('Failed to load events:', error);
       alert(error.response?.data?.message || 'Failed to load events');
@@ -203,6 +224,44 @@ function EventsList() {
             </Link>
           )}
         </div>
+      </div>
+
+      {/* Event Filter Dropdown */}
+      <div style={{ 
+        marginBottom: '1.5rem',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '1rem',
+        flexWrap: 'wrap'
+      }}>
+        <label style={{ 
+          fontSize: '0.875rem', 
+          fontWeight: 600, 
+          color: 'var(--gray-700)',
+          whiteSpace: 'nowrap'
+        }}>
+          Filter Events:
+        </label>
+        <select
+          value={eventFilter}
+          onChange={(e) => setEventFilter(e.target.value as 'all' | 'my-org' | 'global')}
+          style={{
+            padding: '0.5rem 1rem',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--gray-300)',
+            backgroundColor: 'white',
+            fontSize: '0.875rem',
+            color: 'var(--gray-900)',
+            cursor: 'pointer',
+            minWidth: '180px'
+          }}
+        >
+          <option value="all">All Events</option>
+          {user?.organizationId && (
+            <option value="my-org">My Organization</option>
+          )}
+          <option value="global">Global Events</option>
+        </select>
       </div>
 
       {/* Tab Navigation for Users */}
@@ -370,9 +429,12 @@ function EventsList() {
                         // User actions (for regular users)
                         if (!isAdmin && !isOrg) {
                           if (!isRegistered) {
+                            const attendanceCount = attendanceCounts[event.id] || 0;
+                            const isFull = event.capacity > 0 && attendanceCount >= event.capacity;
                             actions.push({
-                              label: 'Register',
-                              onClick: () => registerForEvent(event.id),
+                              label: isFull ? 'Full' : 'Register',
+                              onClick: isFull ? undefined : () => registerForEvent(event.id),
+                              disabled: isFull,
                             });
                           } else {
                             actions.push({

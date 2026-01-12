@@ -28,8 +28,8 @@ export class InvitesController {
   @Post()
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.ORG)
-  create(@Body() createInviteDto: CreateInviteDto) {
-    return this.invitesService.create(createInviteDto);
+  create(@Body() createInviteDto: CreateInviteDto, @Request() req) {
+    return this.invitesService.create(createInviteDto, req.user);
   }
 
   // Get invites - users can see their own, admins/org can see all
@@ -48,8 +48,13 @@ export class InvitesController {
       return this.invitesService.findAll(eventId, organizationId, currentUserId);
     }
     
+    // For org admins, automatically filter by their organization if no organizationId is provided
+    const finalOrganizationId = userRole === UserRole.ORG && !organizationId 
+      ? req.user.organizationId 
+      : organizationId;
+    
     // Admin and org admins can filter by userId or see all
-    return this.invitesService.findAll(eventId, organizationId, userId);
+    return this.invitesService.findAll(eventId, finalOrganizationId, userId);
   }
 
   // Get my invites - endpoint for users to see their pending invites
@@ -79,8 +84,8 @@ export class InvitesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.ORG)
   @HttpCode(HttpStatus.OK)
-  cancel(@Param('id') id: string, @Query('organizationId') organizationId: string) {
-    return this.invitesService.cancel(id, organizationId);
+  cancel(@Param('id') id: string, @Request() req) {
+    return this.invitesService.cancel(id, req.user);
   }
 
   @Delete(':id')

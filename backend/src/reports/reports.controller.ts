@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Query, UseGuards, Request } from '@nestjs/common';
 import { ReportsService } from './reports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -12,29 +12,35 @@ export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
   @Get('double-booked-users')
-  getDoubleBookedUsers() {
-    return this.reportsService.findDoubleBookedUsers();
+  getDoubleBookedUsers(@Request() req) {
+    const organizationId = req.user.role === UserRole.ORG ? req.user.organizationId : undefined;
+    return this.reportsService.findDoubleBookedUsers(organizationId);
   }
 
   @Get('violated-constraints')
-  getEventsWithViolatedConstraints() {
-    return this.reportsService.findEventsWithViolatedConstraints();
+  getEventsWithViolatedConstraints(@Request() req) {
+    const organizationId = req.user.role === UserRole.ORG ? req.user.organizationId : undefined;
+    return this.reportsService.findEventsWithViolatedConstraints(organizationId);
   }
 
   @Get('resource-utilization')
-  getResourceUtilization(@Query('organizationId') organizationId?: string) {
-    return this.reportsService.getResourceUtilizationPerOrganization(organizationId);
+  getResourceUtilization(@Request() req, @Query('organizationId') organizationId?: string) {
+    // If org admin, use their org; if admin, allow query param override
+    const finalOrgId = req.user.role === UserRole.ORG ? req.user.organizationId : organizationId;
+    return this.reportsService.getResourceUtilizationPerOrganization(finalOrgId);
   }
 
   @Get('parent-child-violations')
-  getParentChildViolations() {
-    return this.reportsService.findParentEventsWithInvalidChildren();
+  getParentChildViolations(@Request() req) {
+    const organizationId = req.user.role === UserRole.ORG ? req.user.organizationId : undefined;
+    return this.reportsService.findParentEventsWithInvalidChildren(organizationId);
   }
 
   @Get('external-attendees')
-  getEventsWithExternalAttendees(@Query('threshold') threshold?: string) {
+  getEventsWithExternalAttendees(@Request() req, @Query('threshold') threshold?: string) {
     const thresholdNum = threshold ? parseInt(threshold, 10) : 10;
-    return this.reportsService.findEventsWithExternalAttendeesExceedingThreshold(thresholdNum);
+    const organizationId = req.user.role === UserRole.ORG ? req.user.organizationId : undefined;
+    return this.reportsService.findEventsWithExternalAttendeesExceedingThreshold(thresholdNum, organizationId);
   }
 
   @Post('refresh-utilization-view')
