@@ -57,15 +57,19 @@ function InvitesManagement() {
 
   const loadData = async () => {
     try {
-      const orgId = isAdmin ? undefined : user?.organizationId;
+      setLoading(true);
+      // For org admins, backend will automatically filter by their organization
+      // For admins, don't pass organizationId to see all invites
       const [invitesRes, eventsRes, usersRes] = await Promise.all([
-        api.get('/invites', { params: orgId ? { organizationId: orgId } : {} }),
-        api.get('/events', { params: orgId ? { organizationId: orgId } : {} }),
+        api.get('/invites'),
+        // Super Admin: don't pass organizationId to see all events
+        // Org Admin: pass organizationId when filtering, but backend will handle visibility
+        api.get('/events', { params: isAdmin ? {} : (user?.organizationId ? { organizationId: user.organizationId } : {}) }),
         api.get('/users'),
       ]);
-      setInvites(invitesRes.data);
-      setEvents(eventsRes.data);
-      setAllUsers(usersRes.data);
+      setInvites(invitesRes.data || []);
+      setEvents(eventsRes.data || []);
+      setAllUsers(usersRes.data || []);
       
       // Initial filter: org admins can see their org users + independent users
       const filteredUsers = usersRes.data.filter((u: User) => 
@@ -115,8 +119,10 @@ function InvitesManagement() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const orgId = user?.organizationId;
-    if (!orgId) {
+    
+    // For admins, organizationId is optional (backend will use event's organization)
+    // For org admins, organizationId is required
+    if (!isAdmin && !user?.organizationId) {
       alert('You must belong to an organization to send invites');
       return;
     }
@@ -124,8 +130,12 @@ function InvitesManagement() {
     try {
       const inviteData: any = {
         eventId: formData.eventId,
-        invitedByOrganizationId: orgId,
       };
+      
+      // Only include organizationId for org admins (admins don't need it)
+      if (!isAdmin && user?.organizationId) {
+        inviteData.invitedByOrganizationId = user.organizationId;
+      }
 
       if (formData.userId) {
         inviteData.userId = formData.userId;
@@ -175,13 +185,15 @@ function InvitesManagement() {
 
   const handleCancel = async (inviteId: string) => {
     if (!confirm('Are you sure you want to cancel this invite?')) return;
-    const orgId = user?.organizationId;
-    if (!orgId) {
+    
+    // Admins can cancel any invite, org admins need organizationId
+    if (!isAdmin && !user?.organizationId) {
       alert('You must belong to an organization to cancel invites');
       return;
     }
+    
     try {
-      await api.post(`/invites/${inviteId}/cancel`, null, { params: { organizationId: orgId } });
+      await api.post(`/invites/${inviteId}/cancel`);
       loadData();
     } catch (error: any) {
       console.error('Failed to cancel invite:', error);
@@ -200,7 +212,8 @@ function InvitesManagement() {
     }
   };
 
-  if (!user?.organizationId && !isAdmin) {
+  // Only block regular users without organization
+  if (!isAdmin && !user?.organizationId) {
     return <div className="card">You must belong to an organization to manage invites</div>;
   }
 

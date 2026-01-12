@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Param, Delete, Query, UseGuards } from '@n
 import { AttendancesService } from './attendances.service';
 import { CreateAttendanceDto } from './dto/create-attendance.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('attendances')
 @UseGuards(JwtAuthGuard)
@@ -15,6 +16,12 @@ export class AttendancesController {
 
   @Post(':id/checkin')
   checkIn(@Param('id') id: string) {
+    return this.attendancesService.checkIn(id);
+  }
+
+  @Public()
+  @Post('public/:id/checkin')
+  checkInPublic(@Param('id') id: string) {
     return this.attendancesService.checkIn(id);
   }
 

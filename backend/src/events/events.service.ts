@@ -67,22 +67,32 @@ export class EventsService {
     }
     // Org admin: own org events (including drafts) OR published events with external attendees
     else if (userRole === UserRole.ORG && userOrgId) {
-      const whereConditions: any[] = [];
-      
-      // Own organization events (all statuses)
-      whereConditions.push({ organizationId: userOrgId });
-      
-      // Published events that allow external attendees (from any org)
-      whereConditions.push({ 
-        allowExternalAttendees: true, 
-        status: 'published' 
-      });
-      
-      events = await this.eventRepository.find({
-        where: whereConditions,
-        relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
-        order: { startTime: 'ASC' },
-      });
+      // If organizationId filter is provided, return ONLY events from that organization
+      if (organizationId) {
+        events = await this.eventRepository.find({
+          where: { organizationId },
+          relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
+          order: { startTime: 'ASC' },
+        });
+      } else {
+        // No filter: return own org events + published external events
+        const whereConditions: any[] = [];
+        
+        // Own organization events (all statuses)
+        whereConditions.push({ organizationId: userOrgId });
+        
+        // Published events that allow external attendees (from any org)
+        whereConditions.push({ 
+          allowExternalAttendees: true, 
+          status: 'published' 
+        });
+        
+        events = await this.eventRepository.find({
+          where: whereConditions,
+          relations: ['organization', 'parentEvent', 'childEvents', 'resourceAllocations'],
+          order: { startTime: 'ASC' },
+        });
+      }
     } else {
       // Regular users: published events from their org OR published events with external attendees
       const whereConditions: any[] = [];

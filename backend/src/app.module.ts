@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { MailerModule } from '@nestjs-modules/mailer';
 import { AppController } from './app.controller';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { UsersModule } from './users/users.module';
@@ -31,6 +32,19 @@ import { Invite } from './entities/invite.entity';
             entities: [Organization, User, Event, Resource, Attendance, ResourceAllocation, Invite],
       synchronize: false,
       logging: true,
+    }),
+    MailerModule.forRoot({
+      transport: {
+        host: process.env.SMTP_HOST || 'smtp.mailtrap.io',
+        port: parseInt(process.env.SMTP_PORT || '2525'),
+        auth: {
+          user: process.env.SMTP_USER || 'your-mailtrap-user',
+          pass: process.env.SMTP_PASS || 'your-mailtrap-password',
+        },
+      },
+      defaults: {
+        from: process.env.SMTP_FROM || '"Event Booking System" <noreply@eventbooking.com>',
+      },
     }),
     OrganizationsModule,
     UsersModule,

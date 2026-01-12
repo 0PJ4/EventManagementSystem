@@ -63,6 +63,9 @@ export class Invite {
   @Column({ type: 'enum', enum: InviteStatus, default: InviteStatus.PENDING })
   status: InviteStatus;
 
+  @Column({ type: 'varchar', length: 255, unique: true, nullable: true })
+  token: string | null;
+
   @Column({ type: 'timestamp', nullable: true })
   respondedAt: Date | null;
 

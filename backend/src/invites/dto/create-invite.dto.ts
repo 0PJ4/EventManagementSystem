@@ -21,8 +21,8 @@ export class CreateInviteDto {
   userName?: string | null;
 
   @IsUUID()
-  @IsNotEmpty()
-  invitedByOrganizationId: string;
+  @IsOptional()
+  invitedByOrganizationId?: string | null;
 
   @IsUUID()
   @IsOptional()
