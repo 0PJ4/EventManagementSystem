@@ -41,4 +41,14 @@ export class ReportsController {
   refreshUtilizationView() {
     return this.reportsService.refreshResourceUtilizationView();
   }
+
+  @Get('capacity-utilization')
+  getCapacityUtilization(@Query('organizationId') organizationId?: string) {
+    return this.reportsService.getCapacityUtilization(organizationId);
+  }
+
+  @Get('show-up-rate')
+  getShowUpRate(@Query('organizationId') organizationId?: string) {
+    return this.reportsService.getShowUpRate(organizationId);
+  }
 }

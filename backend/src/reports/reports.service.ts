@@ -282,4 +282,85 @@ export class ReportsService {
     const query = `REFRESH MATERIALIZED VIEW CONCURRENTLY IF EXISTS resource_utilization_summary;`;
     await this.dataSource.query(query);
   }
+
+  /**
+   * Capacity Utilization Analytics
+   * Calculates percentage of event capacity filled for each event
+   */
+  async getCapacityUtilization(organizationId?: string): Promise<any[]> {
+    let orgFilter = '';
+    if (organizationId) {
+      orgFilter = `WHERE e."organizationId" = $1`;
+    }
+
+    const query = `
+      SELECT 
+        e.id as event_id,
+        e.title,
+        e."startTime" as start_time,
+        e."endTime" as end_time,
+        e.capacity,
+        COUNT(a.id) as attendance_count,
+        CASE 
+          WHEN e.capacity > 0 THEN ROUND((COUNT(a.id)::DECIMAL / e.capacity * 100), 2)
+          ELSE 0
+        END as utilization_percentage,
+        o.name as organization_name,
+        CASE
+          WHEN e.capacity > 0 AND (COUNT(a.id)::DECIMAL / e.capacity * 100) > 100 THEN 'Over-filled'
+          WHEN e.capacity > 0 AND (COUNT(a.id)::DECIMAL / e.capacity * 100) >= 80 THEN 'Well-filled'
+          WHEN e.capacity > 0 AND (COUNT(a.id)::DECIMAL / e.capacity * 100) >= 50 THEN 'Moderately-filled'
+          ELSE 'Under-filled'
+        END as fill_status
+      FROM events e
+      LEFT JOIN attendances a ON a."eventId" = e.id
+      LEFT JOIN organizations o ON e."organizationId" = o.id
+      ${orgFilter}
+      GROUP BY e.id, e.title, e."startTime", e."endTime", e.capacity, o.name
+      ORDER BY utilization_percentage DESC, e."startTime" DESC;
+    `;
+
+    if (organizationId) {
+      return this.dataSource.query(query, [organizationId]);
+    }
+    return this.dataSource.query(query);
+  }
+
+  /**
+   * Show-Up Rate Analytics (Check-in vs. Registration)
+   * Compares checked-in attendees vs. total registrations for each event
+   */
+  async getShowUpRate(organizationId?: string): Promise<any[]> {
+    let orgFilter = '';
+    if (organizationId) {
+      orgFilter = `WHERE e."organizationId" = $1`;
+    }
+
+    const query = `
+      SELECT 
+        e.id as event_id,
+        e.title,
+        e."startTime" as start_time,
+        e."endTime" as end_time,
+        COUNT(a.id) as total_registrations,
+        COUNT(CASE WHEN a."checkedInAt" IS NOT NULL THEN 1 END) as checked_in_count,
+        CASE 
+          WHEN COUNT(a.id) > 0 THEN ROUND((COUNT(CASE WHEN a."checkedInAt" IS NOT NULL THEN 1 END)::DECIMAL / COUNT(a.id) * 100), 2)
+          ELSE 0
+        END as show_up_rate,
+        o.name as organization_name
+      FROM events e
+      LEFT JOIN attendances a ON a."eventId" = e.id
+      LEFT JOIN organizations o ON e."organizationId" = o.id
+      ${orgFilter}
+      GROUP BY e.id, e.title, e."startTime", e."endTime", o.name
+      HAVING COUNT(a.id) > 0
+      ORDER BY show_up_rate DESC, e."startTime" DESC;
+    `;
+
+    if (organizationId) {
+      return this.dataSource.query(query, [organizationId]);
+    }
+    return this.dataSource.query(query);
+  }
 }

@@ -15,6 +15,7 @@ interface Resource {
   name: string;
   type: string;
   availableQuantity: number;
+  maxConcurrentUsage?: number | null;
 }
 
 interface Allocation {
@@ -26,12 +27,22 @@ interface Allocation {
   resource?: Resource;
 }
 
+interface AvailabilityInfo {
+  totalQuantity: number;
+  allocatedQuantity: number;
+  remainingQuantity: number;
+  maxConcurrentUsage?: number;
+  currentConcurrentUsage: number;
+  remainingConcurrentCapacity?: number;
+}
+
 function ResourceAllocation() {
   const { user, isAdmin } = useAuth();
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedResourceFilter, setSelectedResourceFilter] = useState<string>('');
   const [formData, setFormData] = useState({
     eventId: '',
     resourceId: '',
@@ -39,7 +50,10 @@ function ResourceAllocation() {
   });
   const [showForm, setShowForm] = useState(false);
   const [editingAllocation, setEditingAllocation] = useState<string | null>(null);
+  const [editingAllocationData, setEditingAllocationData] = useState<Allocation | null>(null);
   const [editQuantity, setEditQuantity] = useState<number>(1);
+  const [availabilityInfo, setAvailabilityInfo] = useState<AvailabilityInfo | null>(null);
+  const [loadingAvailability, setLoadingAvailability] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -82,21 +96,44 @@ function ResourceAllocation() {
     }
   };
 
-  const handleEdit = (allocation: Allocation) => {
+  const handleEdit = async (allocation: Allocation) => {
     setEditingAllocation(allocation.id);
+    setEditingAllocationData(allocation);
     setEditQuantity(allocation.quantity);
+    setAvailabilityInfo(null);
+    
+    // Load availability information for this allocation
+    if (allocation.event && allocation.resource) {
+      setLoadingAvailability(true);
+      try {
+        const response = await api.get(`/resources/${allocation.resourceId}/availability`, {
+          params: {
+            startTime: new Date(allocation.event.startTime).toISOString(),
+            endTime: new Date(allocation.event.endTime).toISOString(),
+            excludeEventId: allocation.eventId, // Exclude current event from conflicts
+          },
+        });
+        setAvailabilityInfo(response.data.availabilityDetails);
+      } catch (error) {
+        console.error('Failed to load availability:', error);
+        setAvailabilityInfo(null);
+      } finally {
+        setLoadingAvailability(false);
+      }
+    }
   };
 
   const handleCancelEdit = () => {
     setEditingAllocation(null);
+    setEditingAllocationData(null);
     setEditQuantity(1);
+    setAvailabilityInfo(null);
   };
 
   const handleUpdateAllocation = async (id: string) => {
     try {
       await api.patch(`/allocations/${id}`, { quantity: editQuantity });
-      setEditingAllocation(null);
-      setEditQuantity(1);
+      handleCancelEdit();
       loadData();
     } catch (error: any) {
       console.error('Failed to update allocation:', error);
@@ -126,11 +163,39 @@ function ResourceAllocation() {
   return (
     <div>
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
           <h2>Resource Allocations</h2>
-          <button onClick={() => setShowForm(!showForm)} className="btn btn-primary">
-            {showForm ? 'Cancel' : 'Allocate Resource'}
-          </button>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <label htmlFor="resourceFilter" style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--gray-700)' }}>
+                Filter by Resource:
+              </label>
+              <select
+                id="resourceFilter"
+                value={selectedResourceFilter}
+                onChange={(e) => setSelectedResourceFilter(e.target.value)}
+                style={{
+                  padding: '0.5rem',
+                  border: '1px solid var(--gray-300)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '0.875rem',
+                  minWidth: '200px',
+                }}
+              >
+                <option value="">All Resources</option>
+                {resources
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((resource) => (
+                    <option key={resource.id} value={resource.id}>
+                      {resource.name} ({resource.type})
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <button onClick={() => setShowForm(!showForm)} className="btn btn-primary">
+              {showForm ? 'Cancel' : 'Allocate Resource'}
+            </button>
+          </div>
         </div>
 
         {showForm && (
@@ -226,6 +291,10 @@ function ResourceAllocation() {
             const allocationsWithData = allocations
               .filter((alloc) => {
                 const event = events.find((e) => e.id === alloc.eventId);
+                // Apply resource filter if selected
+                if (selectedResourceFilter && alloc.resourceId !== selectedResourceFilter) {
+                  return false;
+                }
                 return event && event.id;
               })
               .map((allocation) => {
@@ -339,54 +408,25 @@ function ResourceAllocation() {
                                 </span>
                               </td>
                               <td style={{ textAlign: 'center' }}>
-                                {editingAllocation === allocation.id ? (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      value={editQuantity}
-                                      onChange={(e) => setEditQuantity(parseInt(e.target.value) || 1)}
-                                      style={{ width: '80px', padding: '0.25rem', border: '1px solid var(--gray-300)', borderRadius: 'var(--radius-sm)' }}
-                                    />
-                                  </div>
-                                ) : (
-                                  <span className={`badge badge-${allocation.quantity > 1 ? 'info' : 'gray'}`}>
-                                    {allocation.quantity}
-                                  </span>
-                                )}
+                                <span className={`badge badge-${allocation.quantity > 1 ? 'info' : 'gray'}`}>
+                                  {allocation.quantity}
+                                </span>
                               </td>
                               <td>
-                                {editingAllocation === allocation.id ? (
-                                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                    <button
-                                      onClick={() => handleUpdateAllocation(allocation.id)}
-                                      className="btn btn-sm btn-primary"
-                                    >
-                                      Save
-                                    </button>
-                                    <button
-                                      onClick={handleCancelEdit}
-                                      className="btn btn-sm btn-secondary"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                    <button
-                                      onClick={() => handleEdit(allocation)}
-                                      className="btn btn-sm btn-secondary"
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      onClick={() => deleteAllocation(allocation.id)}
-                                      className="btn btn-sm btn-danger"
-                                    >
-                                      Remove
-                                    </button>
-                                  </div>
-                                )}
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                  <button
+                                    onClick={() => handleEdit(allocation)}
+                                    className="btn btn-sm btn-secondary"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={() => deleteAllocation(allocation.id)}
+                                    className="btn btn-sm btn-danger"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -400,6 +440,282 @@ function ResourceAllocation() {
           })()
         )}
       </div>
+
+      {/* Edit Allocation Overlay Modal */}
+      {editingAllocation && editingAllocationData && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem',
+          }}
+          onClick={handleCancelEdit}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: 'var(--radius-lg)',
+              padding: '2rem',
+              maxWidth: '500px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ marginBottom: '1.5rem' }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--gray-900)', marginBottom: '0.5rem' }}>
+                Edit Allocation Quantity
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--gray-600)', margin: 0 }}>
+                {editingAllocationData.resource?.name} - {editingAllocationData.event?.title}
+              </p>
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <label
+                htmlFor="editQuantity"
+                style={{
+                  display: 'block',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  color: 'var(--gray-700)',
+                  marginBottom: '0.5rem',
+                }}
+              >
+                Quantity *
+              </label>
+              <input
+                id="editQuantity"
+                type="number"
+                min="1"
+                value={editQuantity}
+                onChange={(e) => setEditQuantity(parseInt(e.target.value) || 1)}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  border: '1px solid var(--gray-300)',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: '1rem',
+                  boxSizing: 'border-box',
+                }}
+                autoFocus
+              />
+            </div>
+
+            {/* Availability Information */}
+            {loadingAvailability ? (
+              <div
+                style={{
+                  padding: '1.5rem',
+                  background: 'var(--gray-50)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--gray-200)',
+                  textAlign: 'center',
+                  color: 'var(--gray-500)',
+                  marginBottom: '1.5rem',
+                }}
+              >
+                Loading availability information...
+              </div>
+            ) : availabilityInfo && editingAllocationData.resource ? (
+              <div
+                style={{
+                  padding: '1.25rem',
+                  background: 'var(--blue-50)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--blue-200)',
+                  marginBottom: '1.5rem',
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: 600,
+                    marginBottom: '1rem',
+                    color: 'var(--gray-900)',
+                    fontSize: '1rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                  }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--blue-600)' }}>
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="16" x2="12" y2="12"/>
+                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                  </svg>
+                  Resource Availability
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      paddingBottom: '0.75rem',
+                      borderBottom: '1px solid var(--blue-200)',
+                    }}
+                  >
+                    <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Total Quantity</span>
+                    <span style={{ fontWeight: 600, color: 'var(--gray-900)', fontSize: '1rem' }}>
+                      {availabilityInfo.totalQuantity}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Currently Allocated</span>
+                    <span style={{ fontWeight: 600, color: 'var(--gray-700)' }}>
+                      {availabilityInfo.allocatedQuantity}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      paddingTop: '0.75rem',
+                      borderTop: '1px solid var(--blue-200)',
+                    }}
+                  >
+                    <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Available</span>
+                    <span
+                      style={{
+                        fontWeight: 600,
+                        color: availabilityInfo.remainingQuantity > 0 ? 'var(--green-700)' : 'var(--red-700)',
+                        fontSize: '1rem',
+                      }}
+                    >
+                      {availabilityInfo.remainingQuantity}
+                    </span>
+                  </div>
+                  {editingAllocationData.resource.type === 'shareable' && availabilityInfo.maxConcurrentUsage !== undefined && (
+                    <div
+                      style={{
+                        marginTop: '0.75rem',
+                        paddingTop: '0.75rem',
+                        borderTop: '1px solid var(--blue-200)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          color: 'var(--gray-600)',
+                          marginBottom: '0.5rem',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.025em',
+                        }}
+                      >
+                        Concurrent Usage
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.5rem',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Limit</span>
+                          <span style={{ fontWeight: 600, color: 'var(--gray-900)' }}>
+                            {availabilityInfo.maxConcurrentUsage}
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>In Use</span>
+                          <span style={{ fontWeight: 600, color: 'var(--gray-700)' }}>
+                            {availabilityInfo.currentConcurrentUsage}
+                          </span>
+                        </div>
+                        {availabilityInfo.remainingConcurrentCapacity !== undefined && (
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              paddingTop: '0.5rem',
+                              borderTop: '1px solid var(--blue-200)',
+                            }}
+                          >
+                            <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Available</span>
+                            <span
+                              style={{
+                                fontWeight: 600,
+                                color: availabilityInfo.remainingConcurrentCapacity > 0 ? 'var(--green-700)' : 'var(--red-700)',
+                                fontSize: '0.9375rem',
+                              }}
+                            >
+                              {availabilityInfo.remainingConcurrentCapacity}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Action Buttons */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '0.75rem',
+                paddingTop: '1rem',
+                borderTop: '1px solid var(--gray-200)',
+              }}
+            >
+              <button
+                onClick={handleCancelEdit}
+                className="btn btn-secondary"
+                style={{ minWidth: '100px' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleUpdateAllocation(editingAllocation)}
+                className="btn btn-primary"
+                style={{ minWidth: '100px' }}
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
