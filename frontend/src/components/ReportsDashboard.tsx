@@ -170,26 +170,47 @@ function ReportsDashboard() {
   };
 
   const prepareResourceUtilizationChartData = () => {
-    if (!resourceUtilization || resourceUtilization.length === 0) {
+    if (!resourceUtilization || !Array.isArray(resourceUtilization) || resourceUtilization.length === 0) {
       return [];
     }
     
     return resourceUtilization
-      .filter(item => item && item.resource_name) // Filter out invalid items
+      .filter((item: any) => {
+        // Validate item structure
+        return item && 
+               typeof item === 'object' && 
+               item.resource_name && 
+               typeof item.resource_name === 'string';
+      })
       .slice()
-      .sort((a, b) => {
+      .sort((a: any, b: any) => {
+        // Sort by utilization percentage (primary) and then by hours used (secondary)
+        const utilA = parseFloat(String(a.utilization_percentage || 0));
+        const utilB = parseFloat(String(b.utilization_percentage || 0));
+        if (utilA !== utilB) {
+          return utilB - utilA;
+        }
         const hoursA = parseFloat(String(a.total_hours_used || 0));
         const hoursB = parseFloat(String(b.total_hours_used || 0));
         return hoursB - hoursA;
       })
       .slice(0, 15)
-      .map((item, index) => ({
-        name: `${index + 1}. ${truncateText(item.resource_name || 'Unknown', 20)}`,
-        fullName: item.resource_name || 'Unknown',
-        hoursUsed: parseFloat(String(item.total_hours_used || 0)),
-        peakConcurrent: parseFloat(String(item.peak_concurrent_usage || 0)),
-        maxCapacity: parseFloat(String(item.max_capacity || 0)),
-      }));
+      .map((item: any, index: number) => {
+        const hoursUsed = parseFloat(String(item.total_hours_used || 0));
+        const peakConcurrent = parseFloat(String(item.peak_concurrent_usage || 0));
+        const maxCapacity = parseFloat(String(item.max_capacity || 0));
+        const utilizationPercentage = parseFloat(String(item.utilization_percentage || 0));
+        
+        return {
+          name: `${index + 1}. ${truncateText(item.resource_name || 'Unknown', 20)}`,
+          fullName: item.resource_name || 'Unknown',
+          hoursUsed: isNaN(hoursUsed) ? 0 : hoursUsed,
+          peakConcurrent: isNaN(peakConcurrent) ? 0 : peakConcurrent,
+          maxCapacity: isNaN(maxCapacity) ? 0 : maxCapacity,
+          utilizationPercentage: isNaN(utilizationPercentage) ? 0 : utilizationPercentage,
+          organizationName: item.organization_name || 'Unknown',
+        };
+      });
   };
 
   const prepareViolationChartData = () => {
@@ -554,7 +575,7 @@ function ReportsDashboard() {
                       <th>Total Hours Used</th>
                       <th>Peak Concurrent</th>
                       <th>Max Capacity</th>
-                      <th>Status</th>
+                      <th>Utilization</th>
                     </tr>
                   </thead>
                   <tbody>

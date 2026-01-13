@@ -141,46 +141,241 @@ export class ReportsService {
   }
 
   /**
-   * c. Compute resource utilization per organization
+   * Compute resource utilization per organization
+   * Uses materialized view for performance with proper error handling and data validation
+   * Note: The materialized view only includes resources with organizations (INNER JOIN)
+   * Global resources need to be queried separately from the resources table
    */
   async getResourceUtilizationPerOrganization(organizationId?: string): Promise<any[]> {
-    try {
-      // Validate organizationId if provided
-      if (organizationId && organizationId.trim() === '') {
-        organizationId = undefined;
+    // Track retry attempts to prevent infinite loops
+    const MAX_RETRIES = 1;
+    let retryCount = 0;
+    
+    const executeQuery = async (): Promise<any[]> => {
+      try {
+        // Validate and sanitize organizationId
+        let sanitizedOrgId: string | undefined = undefined;
+        if (organizationId && typeof organizationId === 'string') {
+          const trimmed = organizationId.trim();
+          // Basic UUID validation (UUID v4 format)
+          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+          if (trimmed.length > 0 && uuidRegex.test(trimmed)) {
+            sanitizedOrgId = trimmed;
+          }
+        }
+
+        // Build query - First get data from materialized view (org-specific resources)
+        let query: string;
+        const params: any[] = [];
+
+        // Query materialized view - column names match the view definition
+        // The view has: organization_id, organization_name, resource_id, resource_name, 
+        // resource_type, total_hours_used, peak_concurrent_usage, "availableQuantity", 
+        // max_capacity, is_underutilized
+        if (sanitizedOrgId) {
+          // Query with organization filter
+          query = `
+            SELECT 
+              rus.organization_id::text as organization_id,
+              rus.organization_name::text as organization_name,
+              rus.resource_id::text,
+              rus.resource_name::text,
+              rus.resource_type::text,
+              COALESCE(CAST(rus.total_hours_used AS NUMERIC), 0)::numeric as total_hours_used,
+              COALESCE(CAST(rus.peak_concurrent_usage AS NUMERIC), 0)::numeric as peak_concurrent_usage,
+              COALESCE(CAST(rus."availableQuantity" AS NUMERIC), 
+                       (SELECT CAST(r."availableQuantity" AS NUMERIC) FROM resources r WHERE r.id = rus.resource_id), 
+                       0)::numeric as available_quantity,
+              COALESCE(CAST(rus.max_capacity AS NUMERIC), 0)::numeric as max_capacity,
+              COALESCE(rus.is_underutilized, false)::boolean as is_underutilized,
+              -- Calculate utilization percentage
+              CASE 
+                WHEN COALESCE(CAST(rus.max_capacity AS NUMERIC), 0) > 0 
+                THEN ROUND((COALESCE(CAST(rus.peak_concurrent_usage AS NUMERIC), 0) / CAST(rus.max_capacity AS NUMERIC) * 100), 2)
+                ELSE 0
+              END::numeric as utilization_percentage
+            FROM resource_utilization_summary rus
+            WHERE rus.organization_id = $1::uuid
+            ORDER BY rus.organization_name, rus.resource_name;
+          `;
+          params.push(sanitizedOrgId);
+        } else {
+          // Query all organizations
+          query = `
+            SELECT 
+              rus.organization_id::text as organization_id,
+              rus.organization_name::text as organization_name,
+              rus.resource_id::text,
+              rus.resource_name::text,
+              rus.resource_type::text,
+              COALESCE(CAST(rus.total_hours_used AS NUMERIC), 0)::numeric as total_hours_used,
+              COALESCE(CAST(rus.peak_concurrent_usage AS NUMERIC), 0)::numeric as peak_concurrent_usage,
+              COALESCE(CAST(rus."availableQuantity" AS NUMERIC), 
+                       (SELECT CAST(r."availableQuantity" AS NUMERIC) FROM resources r WHERE r.id = rus.resource_id), 
+                       0)::numeric as available_quantity,
+              COALESCE(CAST(rus.max_capacity AS NUMERIC), 0)::numeric as max_capacity,
+              COALESCE(rus.is_underutilized, false)::boolean as is_underutilized,
+              -- Calculate utilization percentage
+              CASE 
+                WHEN COALESCE(CAST(rus.max_capacity AS NUMERIC), 0) > 0 
+                THEN ROUND((COALESCE(CAST(rus.peak_concurrent_usage AS NUMERIC), 0) / CAST(rus.max_capacity AS NUMERIC) * 100), 2)
+                ELSE 0
+              END::numeric as utilization_percentage
+            FROM resource_utilization_summary rus
+            ORDER BY rus.organization_name, rus.resource_name;
+          `;
+        }
+
+        // Execute query with proper error handling
+        const results = await this.dataSource.query(query, params);
+
+        // Now get global resources separately (not in materialized view)
+        let globalResourcesQuery = '';
+        const globalParams: any[] = [];
+        
+        if (sanitizedOrgId || !sanitizedOrgId) {
+          // For org admins: include global resources they can use
+          // For admins: show all global resources
+          globalResourcesQuery = `
+            SELECT 
+              'global'::text as organization_id,
+              'Global Resources'::text as organization_name,
+              r.id::text as resource_id,
+              r.name::text as resource_name,
+              r.type::text as resource_type,
+              COALESCE(
+                (SELECT SUM(EXTRACT(EPOCH FROM (e."endTime" - e."startTime")) / 3600)
+                 FROM resource_allocations ra
+                 INNER JOIN events e ON ra."eventId" = e.id
+                 WHERE ra."resourceId" = r.id), 0
+              )::numeric as total_hours_used,
+              COALESCE(
+                (SELECT MAX(concurrent.quantity)
+                 FROM (
+                   SELECT SUM(ra2.quantity) as quantity
+                   FROM resource_allocations ra2
+                   INNER JOIN events e2 ON ra2."eventId" = e2.id
+                   WHERE ra2."resourceId" = r.id
+                   GROUP BY e2."startTime"
+                 ) concurrent), 0
+              )::numeric as peak_concurrent_usage,
+              COALESCE(CAST(r."availableQuantity" AS NUMERIC), 0)::numeric as available_quantity,
+              COALESCE(CAST(
+                CASE 
+                  WHEN r.type = 'shareable' AND r."maxConcurrentUsage" IS NOT NULL 
+                  THEN r."maxConcurrentUsage" 
+                  ELSE r."availableQuantity" 
+                END AS NUMERIC), 0
+              )::numeric as max_capacity,
+              CASE 
+                WHEN COALESCE(
+                  (SELECT SUM(EXTRACT(EPOCH FROM (e."endTime" - e."startTime")) / 3600)
+                   FROM resource_allocations ra
+                   INNER JOIN events e ON ra."eventId" = e.id
+                   WHERE ra."resourceId" = r.id), 0
+                ) < 10 
+                THEN true 
+                ELSE false 
+              END as is_underutilized,
+              -- Calculate utilization percentage
+              CASE 
+                WHEN COALESCE(CAST(
+                  CASE 
+                    WHEN r.type = 'shareable' AND r."maxConcurrentUsage" IS NOT NULL 
+                    THEN r."maxConcurrentUsage" 
+                    ELSE r."availableQuantity" 
+                  END AS NUMERIC), 0) > 0 
+                THEN ROUND((
+                  COALESCE(
+                    (SELECT MAX(concurrent.quantity)
+                     FROM (
+                       SELECT SUM(ra2.quantity) as quantity
+                       FROM resource_allocations ra2
+                       INNER JOIN events e2 ON ra2."eventId" = e2.id
+                       WHERE ra2."resourceId" = r.id
+                       GROUP BY e2."startTime"
+                     ) concurrent), 0
+                  ) / CAST(
+                    CASE 
+                      WHEN r.type = 'shareable' AND r."maxConcurrentUsage" IS NOT NULL 
+                      THEN r."maxConcurrentUsage" 
+                      ELSE r."availableQuantity" 
+                    END AS NUMERIC) * 100), 2)
+                ELSE 0
+              END::numeric as utilization_percentage
+            FROM resources r
+            WHERE (r."isGlobal" = true OR r."organizationId" IS NULL)
+            ORDER BY r.name;
+          `;
+        }
+
+        let globalResults: any[] = [];
+        if (globalResourcesQuery) {
+          try {
+            globalResults = await this.dataSource.query(globalResourcesQuery, globalParams);
+          } catch (globalError: any) {
+            // If global resources query fails, log but don't fail the whole request
+            console.warn('Failed to fetch global resources:', globalError.message);
+          }
+        }
+
+        // Combine and transform results
+        const allResults = [...results, ...globalResults];
+        
+        const transformedResults = allResults.map((row: any) => {
+          // Safely parse numeric values
+          const totalHoursUsed = parseFloat(String(row.total_hours_used || 0));
+          const peakConcurrent = parseFloat(String(row.peak_concurrent_usage || 0));
+          const availableQty = parseFloat(String(row.available_quantity || 0));
+          const maxCapacity = parseFloat(String(row.max_capacity || 0));
+          const utilizationPct = parseFloat(String(row.utilization_percentage || 0));
+          
+          return {
+            organization_id: row.organization_id ? String(row.organization_id) : 'global',
+            organization_name: String(row.organization_name || 'Unknown'),
+            resource_id: String(row.resource_id || ''),
+            resource_name: String(row.resource_name || 'Unknown'),
+            resource_type: String(row.resource_type || 'unknown'),
+            total_hours_used: isNaN(totalHoursUsed) ? 0 : totalHoursUsed,
+            peak_concurrent_usage: isNaN(peakConcurrent) ? 0 : peakConcurrent,
+            available_quantity: isNaN(availableQty) ? 0 : availableQty,
+            max_capacity: isNaN(maxCapacity) ? 0 : maxCapacity,
+            utilization_percentage: isNaN(utilizationPct) ? 0 : utilizationPct,
+            is_underutilized: Boolean(row.is_underutilized || false),
+          };
+        });
+        
+        return transformedResults;
+      } catch (error: any) {
+        // Enhanced error logging with context
+        console.error('Error in getResourceUtilizationPerOrganization:', {
+          error: error.message,
+          stack: error.stack,
+          organizationId: organizationId,
+          retryCount,
+          timestamp: new Date().toISOString(),
+        });
+        
+        // Check if materialized view exists and retry ONCE if needed
+        if (error.message && error.message.includes('does not exist') && retryCount < MAX_RETRIES) {
+          retryCount++;
+          console.log(`Retrying after refresh (attempt ${retryCount}/${MAX_RETRIES})...`);
+          try {
+            await this.refreshResourceUtilizationView();
+            // Retry the query once
+            return executeQuery();
+          } catch (refreshError: any) {
+            console.error('Failed to refresh materialized view:', refreshError);
+            throw new Error('Resource utilization data is not available. Please contact administrator.');
+          }
+        }
+        
+        // Re-throw with user-friendly message
+        throw new Error(`Failed to retrieve resource utilization data: ${error.message}`);
       }
+    };
 
-      let whereClause = '';
-      const params: any[] = [];
-      
-      if (organizationId) {
-        whereClause = 'WHERE organization_id = $1';
-        params.push(organizationId);
-      }
-
-      // Use the materialized view for better performance
-      const query = `
-        SELECT 
-          organization_id,
-          organization_name,
-          resource_id,
-          resource_name,
-          resource_type,
-          total_hours_used,
-          peak_concurrent_usage,
-          "availableQuantity" as available_quantity,
-          max_capacity,
-          is_underutilized
-        FROM resource_utilization_summary
-        ${whereClause}
-        ORDER BY organization_name, resource_name;
-      `;
-
-      return await this.dataSource.query(query, params);
-    } catch (error) {
-      console.error('Error in getResourceUtilizationPerOrganization:', error);
-      throw error;
-    }
+    return executeQuery();
   }
 
   /**
