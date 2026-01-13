@@ -11,6 +11,7 @@ import { AllocationsModule } from './allocations/allocations.module';
 import { ReportsModule } from './reports/reports.module';
 import { InvitesModule } from './invites/invites.module';
 import { AuthModule } from './auth/auth.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { Organization } from './entities/organization.entity';
 import { User } from './entities/user.entity';
 import { Event } from './entities/event.entity';
@@ -18,6 +19,7 @@ import { Resource } from './entities/resource.entity';
 import { Attendance } from './entities/attendance.entity';
 import { ResourceAllocation } from './entities/resource-allocation.entity';
 import { Invite } from './entities/invite.entity';
+import { InventoryTransaction } from './entities/inventory-transaction.entity';
 
 @Module({
   controllers: [AppController],
@@ -29,7 +31,7 @@ import { Invite } from './entities/invite.entity';
       username: process.env.DB_USERNAME || 'postgres',
       password: process.env.DB_PASSWORD || 'postgres',
       database: process.env.DB_DATABASE || 'event_booking',
-            entities: [Organization, User, Event, Resource, Attendance, ResourceAllocation, Invite],
+            entities: [Organization, User, Event, Resource, Attendance, ResourceAllocation, Invite, InventoryTransaction],
       synchronize: false,
       logging: true,
     }),
@@ -51,10 +53,11 @@ import { Invite } from './entities/invite.entity';
     EventsModule,
     ResourcesModule,
     AttendancesModule,
-          AllocationsModule,
-          ReportsModule,
-          InvitesModule,
-          AuthModule,
-        ],
+      AllocationsModule,
+      ReportsModule,
+      InvitesModule,
+      AuthModule,
+      InventoryModule,
+    ],
 })
 export class AppModule {}

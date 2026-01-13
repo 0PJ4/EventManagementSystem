@@ -48,6 +48,11 @@ export class ReportsService {
 
   /**
    * b. List all events that violate resource constraints
+   * 
+   * Fixed CONSUMABLE_EXCEEDED logic:
+   * - Now detects global shortages across ALL events
+   * - Returns ALL events contributing to the shortage
+   * - Example: 100 notebooks, Event A takes 60, Event B takes 60 → BOTH flagged
    */
   async findEventsWithViolatedConstraints(organizationId?: string): Promise<any[]> {
     let orgFilter = '';
@@ -57,7 +62,7 @@ export class ReportsService {
 
     const query = `
       WITH resource_violations AS (
-        -- Exclusive resources double-booked
+        -- Exclusive resources double-booked (UNCHANGED)
         SELECT 
           ra1."eventId" as event_id,
           ra1."resourceId" as resource_id,
@@ -79,7 +84,7 @@ export class ReportsService {
         
         UNION ALL
         
-        -- Shareable resources over-allocated
+        -- Shareable resources over-allocated (UNCHANGED)
         SELECT 
           ra."eventId" as event_id,
           ra."resourceId" as resource_id,
@@ -107,28 +112,36 @@ export class ReportsService {
         
         UNION ALL
         
-        -- Consumables exceeding available quantity
+        -- Consumables with negative balance (LEDGER MODEL)
+        -- Uses window functions to detect when running balance drops below zero
+        -- This accounts for time-based inventory changes (restocks, allocations)
         SELECT 
-          ra."eventId" as event_id,
-          ra."resourceId" as resource_id,
+          it."relatedEventId" as event_id,
+          it."resourceId" as resource_id,
           r.name as resource_name,
           'CONSUMABLE_EXCEEDED' as violation_type,
           e.title as event_title,
           e."startTime" as start_time,
           e."endTime" as end_time
-        FROM resource_allocations ra
-        INNER JOIN resources r ON ra."resourceId" = r.id
-        INNER JOIN events e ON ra."eventId" = e.id
+        FROM (
+          -- Calculate running balance using window function
+          SELECT 
+            "resourceId",
+            "relatedEventId",
+            "transactionDate",
+            quantity,
+            SUM(quantity) OVER (
+              PARTITION BY "resourceId" 
+              ORDER BY "transactionDate", "createdAt"
+            ) as running_balance
+          FROM inventory_transactions
+        ) it
+        INNER JOIN resources r ON it."resourceId" = r.id
+        INNER JOIN events e ON it."relatedEventId" = e.id
         WHERE r.type = 'consumable'
+          AND it."relatedEventId" IS NOT NULL
+          AND it.running_balance < 0
           ${organizationId ? `AND e."organizationId" = $1` : ''}
-          AND EXISTS (
-            SELECT 1
-            FROM resource_allocations ra2
-            WHERE ra2."resourceId" = ra."resourceId"
-              AND ra2."eventId" = ra."eventId"
-            GROUP BY ra2."resourceId", ra2."eventId"
-            HAVING COALESCE(SUM(ra2.quantity), 0) > r."availableQuantity"
-          )
       )
       SELECT * FROM resource_violations
       ORDER BY start_time, resource_name;

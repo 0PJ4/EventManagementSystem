@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany, Index } from 'typeorm';
 import { Organization } from './organization.entity';
 import { Attendance } from './attendance.entity';
 import { Invite } from './invite.entity';
@@ -24,9 +24,11 @@ export class User {
   password: string;
 
   @Column({ type: 'enum', enum: UserRole, default: UserRole.USER })
+  @Index()
   role: UserRole;
 
   @Column({ type: 'uuid', nullable: true })
+  @Index()
   organizationId: string | null;
 
   @ManyToOne(() => Organization, organization => organization.users, { 
