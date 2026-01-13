@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan, MoreThan, Or, ILike } from 'typeorm';
+import { Repository, Between, LessThan, MoreThan, Or, ILike, In } from 'typeorm';
 import { Event } from '../entities/event.entity';
 import { Attendance } from '../entities/attendance.entity';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -307,18 +307,33 @@ export class EventsService {
 
     // If we have a current event, check if overlapping events are parent/child related
     if (currentEventId) {
-      const currentEvent = await this.eventRepository.findOne({
-        where: { id: currentEventId },
-        relations: ['parentEvent', 'childEvents'],
-      });
+      // FIX: Load all overlapping events in a single query to avoid N+1
+      const overlappingEventIds = overlappingAttendances.map(a => a.eventId);
+      
+      if (overlappingEventIds.length === 0) {
+        return false;
+      }
+
+      const [currentEvent, overlappingEvents] = await Promise.all([
+        this.eventRepository.findOne({
+          where: { id: currentEventId },
+          relations: ['parentEvent', 'childEvents'],
+        }),
+        this.eventRepository.find({
+          where: { id: In(overlappingEventIds) },
+          relations: ['parentEvent', 'childEvents'],
+        }),
+      ]);
 
       if (currentEvent) {
+        // Create a map for quick lookup
+        const overlappingEventsMap = new Map(
+          overlappingEvents.map(e => [e.id, e])
+        );
+
         // Check if any overlapping event is a parent or child of current event
         for (const attendance of overlappingAttendances) {
-          const overlappingEvent = await this.eventRepository.findOne({
-            where: { id: attendance.eventId },
-            relations: ['parentEvent', 'childEvents'],
-          });
+          const overlappingEvent = overlappingEventsMap.get(attendance.eventId);
 
           if (overlappingEvent) {
             // Check if overlapping event is parent of current event

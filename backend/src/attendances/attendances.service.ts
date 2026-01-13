@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, In, DataSource } from 'typeorm';
 import { Attendance } from '../entities/attendance.entity';
 import { Event } from '../entities/event.entity';
 import { User } from '../entities/user.entity';
@@ -20,98 +20,106 @@ export class AttendancesService {
     @InjectRepository(Invite)
     private inviteRepository: Repository<Invite>,
     private eventsService: EventsService,
+    @InjectDataSource()
+    private dataSource: DataSource,
   ) {}
 
   async register(createAttendanceDto: CreateAttendanceDto): Promise<Attendance> {
-    const event = await this.eventRepository.findOne({
-      where: { id: createAttendanceDto.eventId },
-      relations: ['attendances'],
-    });
+    // Use transaction with pessimistic locking to prevent race conditions
+    return await this.dataSource.transaction(async (manager) => {
+      const event = await manager
+        .createQueryBuilder(Event, 'event')
+        .leftJoinAndSelect('event.attendances', 'attendances')
+        .setLock('pessimistic_write')
+        .where('event.id = :eventId', { eventId: createAttendanceDto.eventId })
+        .getOne();
 
-    if (!event) {
-      throw new NotFoundException(`Event with ID ${createAttendanceDto.eventId} not found`);
-    }
-
-    // Check capacity
-    const currentAttendanceCount = event.attendances?.length || 0;
-    if (event.capacity > 0 && currentAttendanceCount >= event.capacity) {
-      throw new ConflictException('Event capacity exceeded');
-    }
-
-    // If user is registering, validate organization and check for double booking
-    if (createAttendanceDto.userId) {
-      const user = await this.userRepository.findOne({
-        where: { id: createAttendanceDto.userId },
-      });
-
-      if (!user) {
-        throw new NotFoundException(`User with ID ${createAttendanceDto.userId} not found`);
+      if (!event) {
+        throw new NotFoundException(`Event with ID ${createAttendanceDto.eventId} not found`);
       }
 
-      // Validate user can register for this event:
-      // 1. User from same org as event (org-specific events)
-      // 2. Event allows external attendees (anyone can register)
-      // 3. User has an invite to this event
-      
-      let canRegister = false;
-      
-      // Same organization - org members can always register for their org's events
-      if (user.organizationId && event.organizationId && user.organizationId === event.organizationId) {
-        canRegister = true;
+      // Check capacity (while holding lock)
+      const currentAttendanceCount = event.attendances?.length || 0;
+      if (event.capacity > 0 && currentAttendanceCount >= event.capacity) {
+        throw new ConflictException('Event capacity exceeded');
       }
-      
-      // Event allows external attendees - EVERYONE can register (org users, independent users, other orgs)
-      if (event.allowExternalAttendees) {
-        canRegister = true;
-      }
-      
-      // Check for invite - invited users can register regardless of org
-      const invite = await this.inviteRepository.findOne({
-        where: { 
-          eventId: event.id, 
-          userId: user.id,
-          status: In([InviteStatus.PENDING, InviteStatus.ACCEPTED])
+
+      // If user is registering, validate organization and check for double booking
+      if (createAttendanceDto.userId) {
+        const user = await manager.findOne(User, {
+          where: { id: createAttendanceDto.userId },
+        });
+
+        if (!user) {
+          throw new NotFoundException(`User with ID ${createAttendanceDto.userId} not found`);
         }
+
+        // Validate user can register for this event:
+        // 1. User from same org as event (org-specific events)
+        // 2. Event allows external attendees (anyone can register)
+        // 3. User has an invite to this event
+        
+        let canRegister = false;
+        
+        // Same organization - org members can always register for their org's events
+        if (user.organizationId && event.organizationId && user.organizationId === event.organizationId) {
+          canRegister = true;
+        }
+        
+        // Event allows external attendees - EVERYONE can register (org users, independent users, other orgs)
+        if (event.allowExternalAttendees) {
+          canRegister = true;
+        }
+        
+        // Check for invite - invited users can register regardless of org
+        const invite = await manager.findOne(Invite, {
+          where: { 
+            eventId: event.id, 
+            userId: user.id,
+            status: In([InviteStatus.PENDING, InviteStatus.ACCEPTED])
+          }
+        });
+        if (invite) {
+          canRegister = true;
+        }
+        
+        if (!canRegister) {
+          throw new ForbiddenException('You do not have permission to register for this event. This event is org-specific.');
+        }
+
+        // Check for double booking (allows overlapping parent-child events)
+        const isDoubleBooked = await this.eventsService.checkUserDoubleBooking(
+          createAttendanceDto.userId,
+          event.startTime,
+          event.endTime,
+          event.id,
+        );
+
+        if (isDoubleBooked) {
+          throw new ConflictException('User is already registered for an overlapping event that is not a parent or child event');
+        }
+      }
+
+      // If external attendee, check if event allows external attendees
+      if (!createAttendanceDto.userId && !event.allowExternalAttendees) {
+        throw new BadRequestException('Event does not allow external attendees');
+      }
+
+      // Check if already registered (while holding lock)
+      const existing = await manager.findOne(Attendance, {
+        where: createAttendanceDto.userId
+          ? { eventId: createAttendanceDto.eventId, userId: createAttendanceDto.userId }
+          : { eventId: createAttendanceDto.eventId, userEmail: createAttendanceDto.userEmail },
       });
-      if (invite) {
-        canRegister = true;
-      }
-      
-      if (!canRegister) {
-        throw new ForbiddenException('You do not have permission to register for this event. This event is org-specific.');
+
+      if (existing) {
+        throw new ConflictException('Already registered for this event');
       }
 
-      // Check for double booking (allows overlapping parent-child events)
-      const isDoubleBooked = await this.eventsService.checkUserDoubleBooking(
-        createAttendanceDto.userId,
-        event.startTime,
-        event.endTime,
-        event.id,
-      );
-
-      if (isDoubleBooked) {
-        throw new ConflictException('User is already registered for an overlapping event that is not a parent or child event');
-      }
-    }
-
-    // If external attendee, check if event allows external attendees
-    if (!createAttendanceDto.userId && !event.allowExternalAttendees) {
-      throw new BadRequestException('Event does not allow external attendees');
-    }
-
-    // Check if already registered
-    const existing = await this.attendanceRepository.findOne({
-      where: createAttendanceDto.userId
-        ? { eventId: createAttendanceDto.eventId, userId: createAttendanceDto.userId }
-        : { eventId: createAttendanceDto.eventId, userEmail: createAttendanceDto.userEmail },
+      // Create and save attendance within transaction
+      const attendance = manager.create(Attendance, createAttendanceDto);
+      return await manager.save(attendance);
     });
-
-    if (existing) {
-      throw new ConflictException('Already registered for this event');
-    }
-
-    const attendance = this.attendanceRepository.create(createAttendanceDto);
-    return this.attendanceRepository.save(attendance);
   }
 
   async checkIn(attendanceId: string): Promise<Attendance> {

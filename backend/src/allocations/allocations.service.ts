@@ -54,56 +54,42 @@ export class AllocationsService {
       throw new ConflictException('Resource already allocated to this event');
     }
 
-    // Validate allocation based on resource type
-    await this.validateAllocation(resource, event, createAllocationDto.quantity);
-
-    const allocation = this.allocationRepository.create(createAllocationDto);
-    return this.allocationRepository.save(allocation);
-  }
-
-  private async validateAllocation(
-    resource: Resource,
-    event: Event,
-    quantity: number,
-  ): Promise<void> {
+    // For CONSUMABLE resources, use inventoryService which handles locking and transaction
     if (resource.type === ResourceType.CONSUMABLE) {
-      /**
-       * LEDGER MODEL VALIDATION
-       * 
-       * Instead of checking static availableQuantity, we calculate the
-       * projected balance at the event's start time.
-       * 
-       * This accounts for:
-       * - Future restocks before this event
-       * - Other events scheduled before this event
-       * - Time-based inventory availability
-       */
-      const projectedBalance = await this.inventoryService.getProjectedBalance(
+      // Create inventory transaction (this has locking built-in)
+      await this.inventoryService.createAllocationTransaction(
         resource.id,
+        createAllocationDto.quantity,
+        event.id,
         event.startTime,
       );
 
-      if (quantity > projectedBalance) {
-        throw new BadRequestException(
-          `Insufficient inventory at event time. Projected available: ${projectedBalance}, Requested: ${quantity}. ` +
-          `Consider rescheduling the event or requesting a restock.`,
-        );
-      }
+      // Save allocation record (inventory transaction already created)
+      const allocation = this.allocationRepository.create(createAllocationDto);
+      return this.allocationRepository.save(allocation);
+    }
 
-      // Additional check: ensure quantity is positive
-      if (quantity <= 0) {
-        throw new BadRequestException('Allocation quantity must be positive');
-      }
-    } else if (resource.type === ResourceType.EXCLUSIVE) {
+    // For EXCLUSIVE and SHAREABLE, validate and save in a single transaction
+    return await this.validateAndAllocate(resource, event, createAllocationDto);
+  }
+
+  /**
+   * Validate and allocate EXCLUSIVE or SHAREABLE resources in a single atomic transaction
+   * This prevents race conditions by ensuring validation and save happen atomically
+   */
+  private async validateAndAllocate(
+    resource: Resource,
+    event: Event,
+    createAllocationDto: CreateAllocationDto,
+  ): Promise<ResourceAllocation> {
+    if (resource.type === ResourceType.EXCLUSIVE) {
       /**
        * CRITICAL FIX: Race Condition Protection
        * 
-       * Without locking, two concurrent requests can both pass the check
-       * and create conflicting allocations (double-booking).
-       * 
-       * Solution: Use pessimistic write lock to ensure atomicity.
+       * Validate and save in a single transaction with pessimistic locking
+       * to prevent double-booking.
        */
-      await this.dataSource.transaction(async (manager) => {
+      return await this.dataSource.transaction(async (manager) => {
         // Lock the resource row to prevent concurrent allocations
         await manager
           .createQueryBuilder(Resource, 'resource')
@@ -131,8 +117,10 @@ export class AllocationsService {
             'Exclusive resource is already allocated to an overlapping event'
           );
         }
-        
-        // Lock is released on transaction commit
+
+        // Create and save allocation within the same transaction
+        const allocation = manager.create(ResourceAllocation, createAllocationDto);
+        return await manager.save(allocation);
       });
     } else if (resource.type === ResourceType.SHAREABLE) {
       if (!resource.maxConcurrentUsage) {
@@ -142,7 +130,7 @@ export class AllocationsService {
       /**
        * CRITICAL FIX: Race Condition Protection for Shareable Resources
        */
-      await this.dataSource.transaction(async (manager) => {
+      return await this.dataSource.transaction(async (manager) => {
         // Lock the resource row
         await manager
           .createQueryBuilder(Resource, 'resource')
@@ -166,12 +154,18 @@ export class AllocationsService {
           .getRawOne();
 
         const currentConcurrent = parseInt(concurrentCount?.total || '0', 10);
-        if (currentConcurrent + quantity > resource.maxConcurrentUsage) {
+        if (currentConcurrent + createAllocationDto.quantity > resource.maxConcurrentUsage) {
           throw new ConflictException(
-            `Concurrent usage (${currentConcurrent + quantity}) exceeds max concurrent usage (${resource.maxConcurrentUsage})`
+            `Concurrent usage (${currentConcurrent + createAllocationDto.quantity}) exceeds max concurrent usage (${resource.maxConcurrentUsage})`
           );
         }
+
+        // Create and save allocation within the same transaction
+        const allocation = manager.create(ResourceAllocation, createAllocationDto);
+        return await manager.save(allocation);
       });
+    } else {
+      throw new BadRequestException('Invalid resource type for this method');
     }
   }
 
@@ -218,62 +212,86 @@ export class AllocationsService {
 
     // If quantity is being updated, validate the new quantity
     if (updateAllocationDto.quantity !== undefined && updateAllocationDto.quantity !== allocation.quantity) {
-      const resource = await this.resourceRepository.findOne({
-        where: { id: allocation.resourceId },
-      });
+      const resource = allocation.resource;
+      const quantityDiff = updateAllocationDto.quantity - allocation.quantity;
 
-      if (!resource) {
-        throw new NotFoundException(`Resource with ID ${allocation.resourceId} not found`);
-      }
-
-      // Validate the new quantity (excluding current allocation)
+      // Validate the new quantity
       if (resource.type === ResourceType.CONSUMABLE) {
-        if (updateAllocationDto.quantity > resource.availableQuantity) {
+        /**
+         * FIX: Use ledger model instead of static availableQuantity
+         * Calculate projected balance at event start time
+         */
+        const projectedBalance = await this.inventoryService.getProjectedBalance(
+          resource.id,
+          allocation.event.startTime,
+        );
+
+        // Calculate what the balance would be after this update
+        // We need to account for the difference in quantity
+        if (quantityDiff > projectedBalance) {
           throw new BadRequestException(
-            `Requested quantity (${updateAllocationDto.quantity}) exceeds available quantity (${resource.availableQuantity})`
+            `Insufficient inventory at event time. Projected available: ${projectedBalance}, Additional quantity needed: ${quantityDiff}. ` +
+            `Consider rescheduling the event or requesting a restock.`,
           );
         }
-        
-        // Check total allocated quantity for this event (excluding current allocation)
-        const totalAllocated = await this.allocationRepository
-          .createQueryBuilder('allocation')
-          .where('allocation.eventId = :eventId', { eventId: allocation.eventId })
-          .andWhere('allocation.resourceId = :resourceId', { resourceId: allocation.resourceId })
-          .andWhere('allocation.id != :allocationId', { allocationId: allocation.id })
-          .select('COALESCE(SUM(allocation.quantity), 0)', 'total')
-          .getRawOne();
 
-        const currentAllocated = parseInt(totalAllocated?.total || '0', 10);
-        if (currentAllocated + updateAllocationDto.quantity > resource.availableQuantity) {
-          throw new BadRequestException('Total allocated quantity exceeds available quantity');
+        // If reducing quantity, create a return transaction for the difference
+        // If increasing quantity, create an allocation transaction for the difference
+        if (quantityDiff < 0) {
+          // Returning inventory
+          await this.inventoryService.createReturnTransaction(
+            resource.id,
+            Math.abs(quantityDiff),
+            allocation.eventId,
+          );
+        } else if (quantityDiff > 0) {
+          // Consuming more inventory
+          await this.inventoryService.createAllocationTransaction(
+            resource.id,
+            quantityDiff,
+            allocation.eventId,
+            allocation.event.startTime,
+          );
         }
       } else if (resource.type === ResourceType.SHAREABLE) {
         if (!resource.maxConcurrentUsage) {
           throw new BadRequestException('Shareable resource must have maxConcurrentUsage defined');
         }
 
-        // Check concurrent usage during event time (excluding current allocation)
-        const concurrentCount = await this.allocationRepository
-          .createQueryBuilder('allocation')
-          .innerJoin('allocation.event', 'event')
-          .where('allocation.resourceId = :resourceId', { resourceId: allocation.resourceId })
-          .andWhere('allocation.id != :allocationId', { allocationId: allocation.id })
-          .andWhere(
-            '(event.startTime < :endTime AND event.endTime > :startTime)',
-            {
-              startTime: allocation.event.startTime,
-              endTime: allocation.event.endTime,
-            }
-          )
-          .select('COALESCE(SUM(allocation.quantity), 0)', 'total')
-          .getRawOne();
+        /**
+         * FIX: Add transaction with locking to prevent race conditions
+         */
+        await this.dataSource.transaction(async (manager) => {
+          // Lock the resource row
+          await manager
+            .createQueryBuilder(Resource, 'resource')
+            .setLock('pessimistic_write')
+            .where('resource.id = :resourceId', { resourceId: resource.id })
+            .getOne();
 
-        const currentConcurrent = parseInt(concurrentCount?.total || '0', 10);
-        if (currentConcurrent + updateAllocationDto.quantity > resource.maxConcurrentUsage) {
-          throw new ConflictException(
-            `Concurrent usage (${currentConcurrent + updateAllocationDto.quantity}) exceeds max concurrent usage (${resource.maxConcurrentUsage})`
-          );
-        }
+          // Check concurrent usage during event time (excluding current allocation)
+          const concurrentCount = await manager
+            .createQueryBuilder(ResourceAllocation, 'allocation')
+            .innerJoin('allocation.event', 'event')
+            .where('allocation.resourceId = :resourceId', { resourceId: allocation.resourceId })
+            .andWhere('allocation.id != :allocationId', { allocationId: allocation.id })
+            .andWhere(
+              '(event.startTime < :endTime AND event.endTime > :startTime)',
+              {
+                startTime: allocation.event.startTime,
+                endTime: allocation.event.endTime,
+              }
+            )
+            .select('COALESCE(SUM(allocation.quantity), 0)', 'total')
+            .getRawOne();
+
+          const currentConcurrent = parseInt(concurrentCount?.total || '0', 10);
+          if (currentConcurrent + updateAllocationDto.quantity > resource.maxConcurrentUsage) {
+            throw new ConflictException(
+              `Concurrent usage (${currentConcurrent + updateAllocationDto.quantity}) exceeds max concurrent usage (${resource.maxConcurrentUsage})`
+            );
+          }
+        });
       }
       // For EXCLUSIVE resources, quantity change doesn't affect validation
 
@@ -294,21 +312,22 @@ export class AllocationsService {
       throw new NotFoundException(`Allocation with ID ${id} not found`);
     }
 
+    /**
+     * FIX: Make removal atomic - fail if return transaction fails
+     * This ensures inventory ledger stays consistent
+     */
     // For consumable resources, create a return transaction
     if (allocation.resource.type === ResourceType.CONSUMABLE) {
-      try {
-        await this.inventoryService.createReturnTransaction(
-          allocation.resourceId,
-          allocation.quantity,
-          allocation.eventId,
-          userId,
-        );
-      } catch (error: any) {
-        console.error('Failed to create return transaction:', error);
-        // Continue with deletion even if return fails (log for manual review)
-      }
+      // If return transaction fails, throw error (don't delete allocation)
+      await this.inventoryService.createReturnTransaction(
+        allocation.resourceId,
+        allocation.quantity,
+        allocation.eventId,
+        userId,
+      );
     }
 
+    // Only delete if return transaction succeeded (or if not consumable)
     await this.allocationRepository.delete(id);
   }
 }
