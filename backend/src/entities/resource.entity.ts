@@ -44,6 +44,15 @@ export class Resource {
   @Column({ type: 'boolean', default: false })
   isGlobal: boolean;
 
+  /**
+   * Cached current stock for consumable resources (performance optimization)
+   * This is updated whenever inventory transactions occur.
+   * For the source of truth, query the inventory_transactions table.
+   * For non-consumables, this mirrors availableQuantity.
+   */
+  @Column({ type: 'int', nullable: true })
+  cachedCurrentStock: number | null;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createdAt: Date;
 

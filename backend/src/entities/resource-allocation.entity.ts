@@ -18,6 +18,7 @@ export class ResourceAllocation {
   id: string;
 
   @Column({ type: 'uuid' })
+  @Index()
   eventId: string;
 
   @ManyToOne(() => Event, event => event.resourceAllocations, { onDelete: 'CASCADE' })
@@ -25,6 +26,7 @@ export class ResourceAllocation {
   event: Event;
 
   @Column({ type: 'uuid' })
+  @Index()
   resourceId: string;
 
   @ManyToOne(() => Resource, resource => resource.allocations, { onDelete: 'CASCADE' })

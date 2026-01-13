@@ -60,6 +60,7 @@ export class Event {
   childEvents: Event[];
 
   @Column({ type: 'enum', enum: EventStatus, default: EventStatus.DRAFT })
+  @Index()
   status: EventStatus;
 
   @Column({ type: 'boolean', default: false })

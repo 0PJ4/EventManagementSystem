@@ -19,6 +19,7 @@ export class Attendance {
   id: string;
 
   @Column({ type: 'uuid', nullable: true })
+  @Index()
   userId: string | null;
 
   @ManyToOne(() => User, user => user.attendances, { nullable: true, onDelete: 'CASCADE' })
@@ -26,6 +27,7 @@ export class Attendance {
   user: User | null;
 
   @Column({ type: 'uuid' })
+  @Index()
   eventId: string;
 
   @ManyToOne(() => Event, event => event.attendances, { onDelete: 'CASCADE' })
@@ -39,6 +41,7 @@ export class Attendance {
   userName: string | null;
 
   @Column({ type: 'timestamp', nullable: true })
+  @Index()
   checkedInAt: Date | null;
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
