@@ -56,17 +56,32 @@ export class AllocationsService {
 
     // For CONSUMABLE resources, use inventoryService which handles locking and transaction
     if (resource.type === ResourceType.CONSUMABLE) {
-      // Create inventory transaction (this has locking built-in)
-      await this.inventoryService.createAllocationTransaction(
-        resource.id,
-        createAllocationDto.quantity,
-        event.id,
-        event.startTime,
-      );
+      // Use transaction to make allocation check and save atomic with inventory transaction
+      return await this.dataSource.transaction(async (manager) => {
+        // Double-check for existing allocation within transaction (prevents race condition)
+        const existingInTransaction = await manager.findOne(ResourceAllocation, {
+          where: {
+            eventId: createAllocationDto.eventId,
+            resourceId: createAllocationDto.resourceId,
+          },
+        });
 
-      // Save allocation record (inventory transaction already created)
-      const allocation = this.allocationRepository.create(createAllocationDto);
-      return this.allocationRepository.save(allocation);
+        if (existingInTransaction) {
+          throw new ConflictException('Resource already allocated to this event');
+        }
+
+        // Create inventory transaction (this has locking built-in)
+        await this.inventoryService.createAllocationTransaction(
+          resource.id,
+          createAllocationDto.quantity,
+          event.id,
+          event.startTime,
+        );
+
+        // Save allocation record within same transaction (inventory transaction already created)
+        const allocation = manager.create(ResourceAllocation, createAllocationDto);
+        return await manager.save(allocation);
+      });
     }
 
     // For EXCLUSIVE and SHAREABLE, validate and save in a single transaction
@@ -218,19 +233,30 @@ export class AllocationsService {
       // Validate the new quantity
       if (resource.type === ResourceType.CONSUMABLE) {
         /**
-         * FIX: Use ledger model instead of static availableQuantity
-         * Calculate projected balance at event start time
+         * FIX: Use ledger model for consumable resources
+         * 
+         * The projected balance at event start time already includes:
+         * - All restocks up to that time (positive)
+         * - All allocations up to that time, INCLUDING the current allocation (negative)
+         * 
+         * To check if we can update to a new quantity:
+         * 1. Get projected balance (includes current allocation as negative)
+         * 2. Add back current allocation quantity (to get balance without this allocation)
+         * 3. Check if new quantity is available: available >= newQuantity
          */
         const projectedBalance = await this.inventoryService.getProjectedBalance(
           resource.id,
           allocation.event.startTime,
         );
 
-        // Calculate what the balance would be after this update
-        // We need to account for the difference in quantity
-        if (quantityDiff > projectedBalance) {
+        // The projected balance includes the current allocation as a negative transaction
+        // So available = projectedBalance + current allocation quantity
+        const availableWithCurrentAllocation = projectedBalance + allocation.quantity;
+        
+        // Check if the new quantity is available
+        if (updateAllocationDto.quantity > availableWithCurrentAllocation) {
           throw new BadRequestException(
-            `Insufficient inventory at event time. Projected available: ${projectedBalance}, Additional quantity needed: ${quantityDiff}. ` +
+            `Insufficient inventory at event time. Available: ${availableWithCurrentAllocation}, Requested: ${updateAllocationDto.quantity}. ` +
             `Consider rescheduling the event or requesting a restock.`,
           );
         }
@@ -259,9 +285,11 @@ export class AllocationsService {
         }
 
         /**
-         * FIX: Add transaction with locking to prevent race conditions
+         * FIX: Make shareable update atomic - validate and save in same transaction
+         * This prevents race conditions where another allocation could be created
+         * between validation and save
          */
-        await this.dataSource.transaction(async (manager) => {
+        return await this.dataSource.transaction(async (manager) => {
           // Lock the resource row
           await manager
             .createQueryBuilder(Resource, 'resource')
@@ -291,6 +319,10 @@ export class AllocationsService {
               `Concurrent usage (${currentConcurrent + updateAllocationDto.quantity}) exceeds max concurrent usage (${resource.maxConcurrentUsage})`
             );
           }
+
+          // Update and save within the same transaction
+          allocation.quantity = updateAllocationDto.quantity;
+          return await manager.save(allocation);
         });
       }
       // For EXCLUSIVE resources, quantity change doesn't affect validation
@@ -298,7 +330,7 @@ export class AllocationsService {
       allocation.quantity = updateAllocationDto.quantity;
     }
 
-    return this.allocationRepository.save(allocation);
+    return await this.allocationRepository.save(allocation);
   }
 
   async remove(id: string, userId?: string): Promise<void> {

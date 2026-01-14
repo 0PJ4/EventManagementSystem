@@ -71,6 +71,9 @@ export class ResourcesController {
 
   @Patch(':id')
   async update(@Param('id') id: string, @Body() updateResourceDto: UpdateResourceDto, @Request() req) {
+    const isAdmin = req.user.role === UserRole.ADMIN;
+    const isOrgAdmin = req.user.role === UserRole.ORG;
+    
     // Org admins can only update resources from their organization
     if (req.user.role === UserRole.ORG) {
       const resource = await this.resourcesService.findOne(id);
@@ -78,7 +81,8 @@ export class ResourcesController {
         throw new ForbiddenException('You can only update resources from your organization');
       }
     }
-    return this.resourcesService.update(id, updateResourceDto);
+    
+    return this.resourcesService.update(id, updateResourceDto, req.user.id, isAdmin, isOrgAdmin);
   }
 
   @Delete(':id')

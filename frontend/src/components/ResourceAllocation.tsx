@@ -555,11 +555,11 @@ function ResourceAllocation() {
               />
             </div>
 
-            {/* Availability Information */}
+            {/* Available Stock Information */}
             {loadingAvailability ? (
               <div
                 style={{
-                  padding: '1.5rem',
+                  padding: '1rem',
                   background: 'var(--gray-50)',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--gray-200)',
@@ -568,166 +568,53 @@ function ResourceAllocation() {
                   marginBottom: '1.5rem',
                 }}
               >
-                Loading availability information...
+                Loading availability...
               </div>
             ) : availabilityInfo && editingAllocationData.resource ? (
               <div
                 style={{
-                  padding: '1.25rem',
+                  padding: '1rem',
                   background: 'var(--blue-50)',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--blue-200)',
                   marginBottom: '1.5rem',
                 }}
               >
-                <div
-                  style={{
-                    fontWeight: 600,
-                    marginBottom: '1rem',
-                    color: 'var(--gray-900)',
-                    fontSize: '1rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                  }}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--blue-600)' }}>
-                    <circle cx="12" cy="12" r="10"/>
-                    <line x1="12" y1="16" x2="12" y2="12"/>
-                    <line x1="12" y1="8" x2="12.01" y2="8"/>
-                  </svg>
-                  Resource Availability
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Available Stock:</span>
+                  <span
+                    style={{
+                      fontWeight: 600,
+                      color: (() => {
+                        if (editingAllocationData.resource.type === 'consumable') {
+                          const available = availabilityInfo.remainingQuantity + editingAllocationData.quantity;
+                          return available > 0 ? 'var(--green-700)' : 'var(--red-700)';
+                        } else if (editingAllocationData.resource.type === 'shareable' && availabilityInfo.remainingConcurrentCapacity !== undefined) {
+                          return availabilityInfo.remainingConcurrentCapacity > 0 ? 'var(--green-700)' : 'var(--red-700)';
+                        } else {
+                          return availabilityInfo.remainingQuantity > 0 ? 'var(--green-700)' : 'var(--red-700)';
+                        }
+                      })(),
+                      fontSize: '1.125rem',
+                    }}
+                  >
+                    {(() => {
+                      if (editingAllocationData.resource.type === 'consumable') {
+                        return `${availabilityInfo.remainingQuantity + editingAllocationData.quantity} units`;
+                      } else if (editingAllocationData.resource.type === 'shareable' && availabilityInfo.remainingConcurrentCapacity !== undefined) {
+                        return `${availabilityInfo.remainingConcurrentCapacity} units`;
+                      } else {
+                        return `${availabilityInfo.remainingQuantity} units`;
+                      }
+                    })()}
+                  </span>
                 </div>
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.75rem',
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      paddingBottom: '0.75rem',
-                      borderBottom: '1px solid var(--blue-200)',
-                    }}
-                  >
-                    <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Total Quantity</span>
-                    <span style={{ fontWeight: 600, color: 'var(--gray-900)', fontSize: '1rem' }}>
-                      {availabilityInfo.totalQuantity}
-                    </span>
+                {editingAllocationData.resource.type === 'consumable' && 
+                 editQuantity > availabilityInfo.remainingQuantity + editingAllocationData.quantity && (
+                  <div style={{ fontSize: '0.875rem', color: 'var(--red-700)', marginTop: '0.5rem' }}>
+                    ⚠️ Requested quantity ({editQuantity}) exceeds available ({availabilityInfo.remainingQuantity + editingAllocationData.quantity})
                   </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Currently Allocated</span>
-                    <span style={{ fontWeight: 600, color: 'var(--gray-700)' }}>
-                      {availabilityInfo.allocatedQuantity}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      paddingTop: '0.75rem',
-                      borderTop: '1px solid var(--blue-200)',
-                    }}
-                  >
-                    <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Available</span>
-                    <span
-                      style={{
-                        fontWeight: 600,
-                        color: availabilityInfo.remainingQuantity > 0 ? 'var(--green-700)' : 'var(--red-700)',
-                        fontSize: '1rem',
-                      }}
-                    >
-                      {availabilityInfo.remainingQuantity}
-                    </span>
-                  </div>
-                  {editingAllocationData.resource.type === 'shareable' && availabilityInfo.maxConcurrentUsage !== undefined && (
-                    <div
-                      style={{
-                        marginTop: '0.75rem',
-                        paddingTop: '0.75rem',
-                        borderTop: '1px solid var(--blue-200)',
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          color: 'var(--gray-600)',
-                          marginBottom: '0.5rem',
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.025em',
-                        }}
-                      >
-                        Concurrent Usage
-                      </div>
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.5rem',
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                          }}
-                        >
-                          <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Limit</span>
-                          <span style={{ fontWeight: 600, color: 'var(--gray-900)' }}>
-                            {availabilityInfo.maxConcurrentUsage}
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                          }}
-                        >
-                          <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>In Use</span>
-                          <span style={{ fontWeight: 600, color: 'var(--gray-700)' }}>
-                            {availabilityInfo.currentConcurrentUsage}
-                          </span>
-                        </div>
-                        {availabilityInfo.remainingConcurrentCapacity !== undefined && (
-                          <div
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              paddingTop: '0.5rem',
-                              borderTop: '1px solid var(--blue-200)',
-                            }}
-                          >
-                            <span style={{ color: 'var(--gray-700)', fontWeight: 500 }}>Available</span>
-                            <span
-                              style={{
-                                fontWeight: 600,
-                                color: availabilityInfo.remainingConcurrentCapacity > 0 ? 'var(--green-700)' : 'var(--red-700)',
-                                fontSize: '0.9375rem',
-                              }}
-                            >
-                              {availabilityInfo.remainingConcurrentCapacity}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             ) : null}
 
@@ -752,6 +639,24 @@ function ResourceAllocation() {
                 onClick={() => handleUpdateAllocation(editingAllocation)}
                 className="btn btn-primary"
                 style={{ minWidth: '100px' }}
+                disabled={
+                  editQuantity === editingAllocationData.quantity ||
+                  editQuantity < 1 ||
+                  (availabilityInfo && 
+                   editingAllocationData.resource?.type === 'consumable' && 
+                   availabilityInfo.remainingQuantity + editingAllocationData.quantity < editQuantity)
+                }
+                title={
+                  editQuantity === editingAllocationData.quantity
+                    ? 'No changes to save'
+                    : editQuantity < 1
+                    ? 'Quantity must be at least 1'
+                    : availabilityInfo && 
+                      editingAllocationData.resource?.type === 'consumable' && 
+                      availabilityInfo.remainingQuantity + editingAllocationData.quantity < editQuantity
+                    ? `Insufficient availability. Available: ${availabilityInfo.remainingQuantity + editingAllocationData.quantity}, Requested: ${editQuantity}`
+                    : undefined
+                }
               >
                 Save Changes
               </button>

@@ -48,7 +48,7 @@ export class InventoryService {
   async getCurrentBalance(resourceId: string): Promise<number> {
     const resource = await this.resourceRepository.findOne({
       where: { id: resourceId },
-      select: ['cachedCurrentStock', 'type'],
+      select: ['type', 'availableQuantity'],
     });
 
     if (!resource) {
@@ -57,15 +57,11 @@ export class InventoryService {
 
     // For non-consumables, return availableQuantity
     if (resource.type !== ResourceType.CONSUMABLE) {
-      return resource.cachedCurrentStock || 0;
+      return resource.availableQuantity;
     }
 
-    // Use cached value if available
-    if (resource.cachedCurrentStock !== null && resource.cachedCurrentStock !== undefined) {
-      return resource.cachedCurrentStock;
-    }
-
-    // Fallback: calculate from transactions
+    // For consumables, always calculate from transactions (source of truth)
+    // This ensures accuracy even if cachedCurrentStock is out of sync
     const result = await this.transactionRepository
       .createQueryBuilder('transaction')
       .select('COALESCE(SUM(transaction.quantity), 0)', 'balance')
@@ -138,9 +134,9 @@ export class InventoryService {
 
       const savedTransaction = await manager.save(transaction);
 
-      // Update cached stock
+      // Update cached stock (handle NULL case)
       await manager.query(
-        `UPDATE resources SET "cachedCurrentStock" = "cachedCurrentStock" - $1 WHERE id = $2`,
+        `UPDATE resources SET "cachedCurrentStock" = COALESCE("cachedCurrentStock", 0) - $1 WHERE id = $2`,
         [quantity, resourceId],
       );
 
@@ -180,9 +176,9 @@ export class InventoryService {
 
       const savedTransaction = await manager.save(transaction);
 
-      // Update cached stock
+      // Update cached stock (handle NULL case)
       await manager.query(
-        `UPDATE resources SET "cachedCurrentStock" = "cachedCurrentStock" + $1 WHERE id = $2`,
+        `UPDATE resources SET "cachedCurrentStock" = COALESCE("cachedCurrentStock", 0) + $1 WHERE id = $2`,
         [quantity, resourceId],
       );
 
@@ -234,10 +230,92 @@ export class InventoryService {
 
       const savedTransaction = await manager.save(transaction);
 
-      // Update cached stock
+      // Update cached stock (handle NULL case - if NULL, set to quantity, otherwise add)
       await manager.query(
-        `UPDATE resources SET "cachedCurrentStock" = "cachedCurrentStock" + $1 WHERE id = $2`,
+        `UPDATE resources SET "cachedCurrentStock" = COALESCE("cachedCurrentStock", 0) + $1 WHERE id = $2`,
         [quantity, resourceId],
+      );
+
+      return savedTransaction;
+    });
+  }
+
+  /**
+   * Create an adjustment transaction (admin-only quantity corrections)
+   * 
+   * This is used when admins need to correct inventory quantities directly.
+   * The quantity difference is calculated and recorded as an adjustment.
+   * 
+   * @param resourceId - Resource being adjusted
+   * @param newQuantity - Target quantity (what the total should be)
+   * @param currentQuantity - Current quantity (from cachedCurrentStock)
+   * @param notes - Optional notes about the adjustment
+   * @param userId - Admin user making the adjustment
+   * @returns Created transaction
+   */
+  async createAdjustmentTransaction(
+    resourceId: string,
+    newQuantity: number,
+    currentQuantity: number,
+    notes?: string,
+    userId?: string,
+  ): Promise<InventoryTransaction> {
+    if (newQuantity < 0) {
+      throw new BadRequestException('Quantity cannot be negative');
+    }
+
+    const quantityDiff = newQuantity - currentQuantity;
+
+    // If no change, still create an audit trail transaction
+    if (quantityDiff === 0) {
+      return await this.dataSource.transaction(async (manager) => {
+        // Update cachedCurrentStock to ensure consistency (even if no change)
+        await manager.query(
+          `UPDATE resources SET "cachedCurrentStock" = $1 WHERE id = $2`,
+          [newQuantity, resourceId],
+        );
+        
+        // Create a zero-quantity adjustment for audit trail
+        const transaction = manager.create(InventoryTransaction, {
+          resourceId,
+          quantity: 0,
+          type: TransactionType.ADJUSTMENT,
+          transactionDate: new Date(),
+          relatedEventId: null,
+          notes: notes || 'Quantity adjustment (no change)',
+          createdBy: userId || null,
+        });
+        return await manager.save(transaction);
+      });
+    }
+
+    return await this.dataSource.transaction(async (manager) => {
+      const resource = await manager.findOne(Resource, { where: { id: resourceId } });
+
+      if (!resource) {
+        throw new BadRequestException('Resource not found');
+      }
+
+      if (resource.type !== ResourceType.CONSUMABLE) {
+        throw new BadRequestException('Adjustment transactions are only for consumable resources');
+      }
+
+      const transaction = manager.create(InventoryTransaction, {
+        resourceId,
+        quantity: quantityDiff, // Can be positive or negative
+        type: TransactionType.ADJUSTMENT,
+        transactionDate: new Date(),
+        relatedEventId: null,
+        notes: notes || `Admin adjustment: ${currentQuantity} → ${newQuantity}`,
+        createdBy: userId || null,
+      });
+
+      const savedTransaction = await manager.save(transaction);
+
+      // Update both cachedCurrentStock (source of truth) and availableQuantity (for consistency)
+      await manager.query(
+        `UPDATE resources SET "cachedCurrentStock" = $1, "availableQuantity" = $1 WHERE id = $2`,
+        [newQuantity, resourceId],
       );
 
       return savedTransaction;

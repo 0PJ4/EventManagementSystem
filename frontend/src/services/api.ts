@@ -34,4 +34,51 @@ api.interceptors.response.use(
   }
 );
 
+// Inventory API methods (for consumable resource ledger management)
+export const inventoryApi = {
+  /**
+   * Create a restock transaction for a consumable resource
+   */
+  restock: (data: {
+    resourceId: string;
+    quantity: number;
+    restockDate?: string;
+    notes?: string;
+  }) => api.post('/inventory/restock', data),
+
+  /**
+   * Get current balance for a resource
+   */
+  getBalance: (resourceId: string) =>
+    api.get(`/inventory/balance/${resourceId}`),
+
+  /**
+   * Get projected balance at a specific date
+   */
+  getProjectedBalance: (resourceId: string, date: string) =>
+    api.get(`/inventory/projected-balance/${resourceId}`, { params: { date } }),
+
+  /**
+   * Get transaction history for a resource
+   */
+  getHistory: (resourceId: string, startDate?: string, endDate?: string) =>
+    api.get(`/inventory/history/${resourceId}`, {
+      params: { startDate, endDate },
+    }),
+
+  /**
+   * Get running balance over time (for charts/visualization)
+   */
+  getRunningBalance: (resourceId: string, startDate?: string, endDate?: string) =>
+    api.get(`/inventory/running-balance/${resourceId}`, {
+      params: { startDate, endDate },
+    }),
+
+  /**
+   * Detect inventory shortages across all resources
+   */
+  detectShortages: (resourceId?: string) =>
+    api.get('/inventory/shortages', { params: resourceId ? { resourceId } : {} }),
+};
+
 export default api;
