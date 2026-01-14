@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import ResourceAvailabilityViewer from './ResourceAvailabilityViewer';
+import toast from 'react-hot-toast';
 import '../App.css';
 
 interface Resource {
@@ -180,9 +181,15 @@ function EventForm() {
       if (unavailable.length > 0) {
         const resourceNames = unavailable.map(r => {
           const res = resources.find(res => res.id === r.allocation.resourceId);
-          return res?.name || 'Unknown';
-        }).join(', ');
-        alert(`The following resources are not available in the requested quantity: ${resourceNames}\n\nPlease adjust your selections or event time.`);
+          const details = r.details?.availabilityDetails;
+          const available = details?.remainingQuantity || 0;
+          const requested = r.allocation.quantity;
+          return `${res?.name || 'Unknown'} (Available: ${available}, Requested: ${requested})`;
+        }).join('\n');
+        toast.error(
+          `The following resources are not available in the requested quantity:\n${resourceNames}\n\nPlease adjust your selections or event time.`,
+          { duration: 6000 }
+        );
         return;
       }
     }
@@ -212,13 +219,78 @@ function EventForm() {
       const existingAllocations = resourceAllocations.filter(a => a.id);
       const newAllocationsToCreate = resourceAllocations.filter(a => !a.id && a.resourceId);
       
-      // Delete removed allocations
+      // Get current allocations from database
       const currentAllocations = await api.get(`/allocations?eventId=${eventId}`);
-      const currentIds = (currentAllocations.data || []).map((a: any) => a.id);
+      const currentAllocationsData = currentAllocations.data || [];
+      const currentIds = currentAllocationsData.map((a: any) => a.id);
       const keptIds = existingAllocations.map(a => a.id);
       const toDelete = currentIds.filter((id: string) => !keptIds.includes(id));
       
+      // Delete removed allocations
       await Promise.all(toDelete.map((allocId: string) => api.delete(`/allocations/${allocId}`)));
+
+      // Update existing allocations that have changed
+      const allocationsToUpdate = existingAllocations.filter(alloc => {
+        const current = currentAllocationsData.find((a: any) => a.id === alloc.id);
+        return current && (current.quantity !== alloc.quantity || current.resourceId !== alloc.resourceId);
+      });
+
+      // Validate and update existing allocations
+      try {
+        await Promise.all(
+          allocationsToUpdate.map(async (alloc) => {
+            // Validate availability if quantity or resource changed
+            if (event.startTime && event.endTime) {
+              try {
+                const availabilityResponse = await api.get(`/resources/${alloc.resourceId}/availability`, {
+                  params: {
+                    startTime: new Date(event.startTime).toISOString(),
+                    endTime: new Date(event.endTime).toISOString(),
+                    excludeEventId: eventId, // Exclude current event from conflicts
+                  },
+                });
+                
+                const availability = availabilityResponse.data;
+                const currentAlloc = currentAllocationsData.find((a: any) => a.id === alloc.id);
+                const quantityChange = alloc.quantity - (currentAlloc?.quantity || 0);
+                
+                // Check if the new quantity is available
+                if (availability.availableQuantity < alloc.quantity) {
+                  const resource = resources.find(r => r.id === alloc.resourceId);
+                  throw new Error(
+                    `Insufficient availability for ${resource?.name || 'resource'}. ` +
+                    `Available: ${availability.availableQuantity}, Requested: ${alloc.quantity}`
+                  );
+                }
+              } catch (err: any) {
+                if (err.response?.status === 400 || err.message) {
+                  throw err;
+                }
+                // If availability check fails for other reasons, still try to update
+                console.warn('Availability check failed, proceeding with update:', err);
+              }
+            }
+            
+            // Update the allocation
+            return api.patch(`/allocations/${alloc.id}`, {
+              quantity: alloc.quantity,
+              resourceId: alloc.resourceId !== currentAllocationsData.find((a: any) => a.id === alloc.id)?.resourceId
+                ? alloc.resourceId
+                : undefined,
+            });
+          })
+        );
+      } catch (updateError: any) {
+        // If update fails and we just created the event, delete it
+        if (createdEventId && !id) {
+          try {
+            await api.delete(`/events/${createdEventId}`);
+          } catch (deleteError) {
+            console.error('Failed to delete event after allocation update error:', deleteError);
+          }
+        }
+        throw updateError;
+      }
 
       // Create new allocations - validate before creating event if it's new
       try {
@@ -244,10 +316,12 @@ function EventForm() {
         throw allocationError;
       }
 
+      toast.success(id ? 'Event updated successfully' : 'Event created successfully');
       navigate('/events');
     } catch (error: any) {
       console.error('Failed to save event:', error);
-      alert(error.response?.data?.message || 'Failed to save event');
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to save event';
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }

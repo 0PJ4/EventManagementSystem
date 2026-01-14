@@ -85,13 +85,21 @@ export class InventoryController {
     },
   ) {
     const restockDate = body.restockDate ? new Date(body.restockDate) : new Date();
-    return this.inventoryService.createRestockTransaction(
+    const transaction = await this.inventoryService.createRestockTransaction(
       body.resourceId,
       body.quantity,
       restockDate,
       body.notes,
       req.user.id,
     );
+    
+    // Return both the transaction and the updated resource balance
+    const updatedBalance = await this.inventoryService.getCurrentBalance(body.resourceId);
+    return {
+      transaction,
+      resourceId: body.resourceId,
+      newBalance: updatedBalance,
+    };
   }
 
   /**

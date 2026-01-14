@@ -1,6 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import api from '../services/api';
+import api, { inventoryApi } from '../services/api';
+import toast from 'react-hot-toast';
+import ActionsDropdown from './ActionsDropdown';
 import '../App.css';
 
 interface Resource {
@@ -39,6 +41,11 @@ function ResourcesList() {
   const [showForm, setShowForm] = useState(false);
   const [editingResource, setEditingResource] = useState<Resource | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [showRestockModal, setShowRestockModal] = useState(false);
+  const [restockingResource, setRestockingResource] = useState<Resource | null>(null);
+  const [restockData, setRestockData] = useState({ quantity: 1, notes: '' });
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const editFormRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (user) {
@@ -52,9 +59,9 @@ function ResourcesList() {
       // Backend will automatically filter for org admins (own org + global resources)
       const response = await api.get('/resources');
       setAllResources(response.data || []);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load resources:', error);
-      alert('Failed to load resources');
+      toast.error(error.response?.data?.message || 'Failed to load resources');
     } finally {
       setLoading(false);
     }
@@ -62,22 +69,30 @@ function ResourcesList() {
 
   // Client-side filtering with useMemo for performance
   const resources = useMemo(() => {
-    if (!searchTerm.trim()) {
-      return allResources;
+    let filtered = [...allResources];
+    
+    // Apply type filter
+    if (typeFilter !== 'all') {
+      filtered = filtered.filter((r: Resource) => r.type === typeFilter);
     }
     
-    const searchLower = searchTerm.toLowerCase().trim();
-    return allResources.filter((r: Resource) => 
-      r.name?.toLowerCase().includes(searchLower) ||
-      r.type?.toLowerCase().includes(searchLower)
-    );
-  }, [allResources, searchTerm]);
+    // Apply search filter
+    if (searchTerm.trim()) {
+      const searchLower = searchTerm.toLowerCase().trim();
+      filtered = filtered.filter((r: Resource) => 
+        r.name?.toLowerCase().includes(searchLower) ||
+        r.type?.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    return filtered;
+  }, [allResources, searchTerm, typeFilter]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const orgId = user?.organizationId;
     if (!orgId && !isAdmin && !formData.isGlobal) {
-      alert('You must belong to an organization to create non-global resources');
+      toast.error('You must belong to an organization to create non-global resources');
       return;
     }
     try {
@@ -89,10 +104,10 @@ function ResourcesList() {
 
       if (editingResource) {
         await api.patch(`/resources/${editingResource.id}`, resourceData);
-        alert('Resource updated successfully!');
+        toast.success('Resource updated successfully!');
       } else {
         await api.post('/resources', resourceData);
-        alert('Resource created successfully!');
+        toast.success('Resource created successfully!');
       }
       
       setFormData({
@@ -108,7 +123,7 @@ function ResourcesList() {
       loadResources();
     } catch (error: any) {
       console.error('Failed to save resource:', error);
-      alert(error.response?.data?.message || 'Failed to save resource');
+      toast.error(error.response?.data?.message || 'Failed to save resource');
     }
   };
 
@@ -123,6 +138,11 @@ function ResourcesList() {
       isGlobal: resource.isGlobal,
     });
     setShowForm(true);
+    
+    // Scroll to edit form after a brief delay to ensure it's rendered
+    setTimeout(() => {
+      editFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
   };
 
   const handleCancelEdit = () => {
@@ -139,14 +159,47 @@ function ResourcesList() {
   };
 
   const deleteResource = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this resource?')) return;
     try {
       await api.delete(`/resources/${id}`);
+      toast.success('Resource deleted successfully');
       loadResources();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete resource:', error);
-      alert('Failed to delete resource');
+      toast.error(error.response?.data?.message || 'Failed to delete resource');
     }
+  };
+
+  const handleRestock = (resource: Resource) => {
+    setRestockingResource(resource);
+    setRestockData({ quantity: 1, notes: '' });
+    setShowRestockModal(true);
+  };
+
+  const handleRestockSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!restockingResource) return;
+
+    try {
+      await inventoryApi.restock({
+        resourceId: restockingResource.id,
+        quantity: restockData.quantity,
+        notes: restockData.notes || undefined,
+      });
+      toast.success(`Successfully restocked ${restockData.quantity} units of ${restockingResource.name}`);
+      setShowRestockModal(false);
+      setRestockingResource(null);
+      setRestockData({ quantity: 1, notes: '' });
+      loadResources(); // Refresh to show updated quantity
+    } catch (error: any) {
+      console.error('Failed to restock resource:', error);
+      toast.error(error.response?.data?.message || 'Failed to restock resource');
+    }
+  };
+
+  const handleCancelRestock = () => {
+    setShowRestockModal(false);
+    setRestockingResource(null);
+    setRestockData({ quantity: 1, notes: '' });
   };
 
   if (!user?.organizationId && !isAdmin) {
@@ -166,9 +219,9 @@ function ResourcesList() {
         </button>
       </div>
 
-      {/* Search Input */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <div style={{ position: 'relative', width: '100%' }}>
+      {/* Search and Filter Inputs */}
+      <div style={{ marginBottom: '1.5rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: '1', minWidth: '250px' }}>
           <svg
             style={{
               position: 'absolute',
@@ -218,10 +271,40 @@ function ResourcesList() {
             }}
           />
         </div>
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          style={{
+            padding: '0.75rem 1rem',
+            fontSize: '0.9375rem',
+            lineHeight: '1.5',
+            color: 'var(--gray-900)',
+            background: 'white',
+            border: '1px solid var(--gray-300)',
+            borderRadius: 'var(--radius-md)',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
+            minWidth: '180px'
+          }}
+          onFocus={(e) => {
+            e.target.style.borderColor = 'var(--primary-500)';
+            e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+          }}
+          onBlur={(e) => {
+            e.target.style.borderColor = 'var(--gray-300)';
+            e.target.style.boxShadow = '0 1px 2px 0 rgba(0, 0, 0, 0.05)';
+          }}
+        >
+          <option value="all">All Types</option>
+          <option value="exclusive">Exclusive</option>
+          <option value="shareable">Shareable</option>
+          <option value="consumable">Consumable</option>
+        </select>
       </div>
 
       {showForm && (
-        <div style={{ padding: '1.5rem', background: 'var(--gray-50)', borderRadius: 'var(--radius-lg)', marginBottom: '1.5rem' }}>
+        <div ref={editFormRef} style={{ padding: '1.5rem', background: 'var(--gray-50)', borderRadius: 'var(--radius-lg)', marginBottom: '1.5rem' }}>
           <h3 style={{ marginBottom: '1rem', color: 'var(--gray-900)' }}>{editingResource ? 'Edit Resource' : 'Create New Resource'}</h3>
           <form onSubmit={handleSubmit}>
             <div className="form-group">
@@ -253,7 +336,7 @@ function ResourcesList() {
               </select>
             </div>
             <div className="form-group">
-              <label>Total Quantity *</label>
+              <label>Total Stock *</label>
               <input
                 type="number"
                 min="0"
@@ -302,7 +385,7 @@ function ResourcesList() {
             <tr>
               <th>Name</th>
               <th>Type</th>
-              <th>Total Quantity</th>
+              <th>Total Stock</th>
               <th>Active allocations</th>
               <th>Max Concurrent</th>
               <th>Global</th>
@@ -350,24 +433,50 @@ function ResourcesList() {
                       )}
                     </td>
                     <td>
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        {(isAdmin || (isOrg && resource.organizationId === user?.organizationId)) && (
-                          <button
-                            onClick={() => handleEdit(resource)}
-                            className="btn btn-sm btn-secondary"
-                          >
-                            Edit
-                          </button>
-                        )}
-                        {(isAdmin || (isOrg && resource.organizationId === user?.organizationId)) && (
-                          <button
-                            onClick={() => deleteResource(resource.id)}
-                            className="btn btn-sm btn-danger"
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
+                      {(() => {
+                        const canRestock = resource.type === 'consumable' && (isAdmin || (isOrg && resource.organizationId === user?.organizationId));
+                        const canEdit = isAdmin || (isOrg && resource.organizationId === user?.organizationId);
+                        const canDelete = isAdmin || (isOrg && resource.organizationId === user?.organizationId);
+                        
+                        const actions: Array<{
+                          label: string;
+                          onClick?: () => void;
+                          danger?: boolean;
+                        }> = [];
+                        
+                        if (canRestock) {
+                          actions.push({
+                            label: 'Restock',
+                            onClick: () => handleRestock(resource),
+                          });
+                        }
+                        
+                        if (canEdit) {
+                          actions.push({
+                            label: 'Edit',
+                            onClick: () => handleEdit(resource),
+                          });
+                        }
+                        
+                        if (canDelete) {
+                          actions.push({
+                            label: 'Delete',
+                            onClick: () => {
+                              if (confirm('Are you sure you want to delete this resource?')) {
+                                deleteResource(resource.id);
+                              }
+                            },
+                            danger: true,
+                          });
+                        }
+                        
+                        // Always use dropdown if there are actions, otherwise show nothing
+                        if (actions.length > 0) {
+                          return <ActionsDropdown actions={actions} />;
+                        }
+                        
+                        return null;
+                      })()}
                     </td>
                   </tr>
                 );
@@ -376,6 +485,71 @@ function ResourcesList() {
           </tbody>
         </table>
       </div>
+
+      {/* Restock Modal */}
+      {showRestockModal && restockingResource && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            padding: '2rem',
+            borderRadius: 'var(--radius-lg)',
+            maxWidth: '500px',
+            width: '90%',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+          }}>
+            <h3 style={{ marginBottom: '1.5rem', color: 'var(--gray-900)' }}>
+              Restock Resource: {restockingResource.name}
+            </h3>
+            <form onSubmit={handleRestockSubmit}>
+              <div className="form-group">
+                <label>Quantity to Add *</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={restockData.quantity}
+                  onChange={(e) => setRestockData({ ...restockData, quantity: parseInt(e.target.value) || 1 })}
+                  required
+                  autoFocus
+                  style={{ width: '100%' }}
+                />
+                <small style={{ color: 'var(--gray-600)', marginTop: '0.25rem', display: 'block' }}>
+                  Current stock: {restockingResource.availableQuantity}
+                </small>
+              </div>
+              <div className="form-group">
+                <label>Notes (Optional)</label>
+                <textarea
+                  value={restockData.notes}
+                  onChange={(e) => setRestockData({ ...restockData, notes: e.target.value })}
+                  placeholder="e.g., Received new shipment, Inventory adjustment, etc."
+                  rows={3}
+                  style={{ width: '100%', resize: 'vertical' }}
+                />
+              </div>
+              <div className="form-actions">
+                <button type="submit" className="btn btn-primary">
+                  Restock
+                </button>
+                <button type="button" onClick={handleCancelRestock} className="btn btn-secondary">
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
