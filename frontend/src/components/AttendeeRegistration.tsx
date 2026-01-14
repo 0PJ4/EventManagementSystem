@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import { formatTableDate } from '../utils/dateFormatter';
 import '../App.css';
 
@@ -64,9 +65,9 @@ function AttendeeRegistration() {
       setAttendances(attendancesRes.data);
       setEvents(eventsRes.data);
       setUsers(usersRes.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load data:', error);
-      alert('Failed to load data');
+      toast.error(error.response?.data?.message || 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -95,39 +96,42 @@ function AttendeeRegistration() {
         attendanceData.userEmail = formData.userEmail;
         attendanceData.userName = formData.userName;
       } else {
-        alert('This event does not allow external attendees. Please select a user.');
+        toast.error('This event does not allow external attendees. Please select a user.');
         return;
       }
 
       await api.post('/attendances', attendanceData);
+      toast.success('Attendee registered successfully!');
       setFormData({ eventId: '', userId: '', userEmail: '', userName: '' });
       setSelectedEvent(null);
       setShowForm(false);
       loadData();
     } catch (error: any) {
       console.error('Failed to register attendee:', error);
-      alert(error.response?.data?.message || 'Failed to register attendee');
+      toast.error(error.response?.data?.message || 'Failed to register attendee');
     }
   };
 
   const handleCheckIn = async (attendanceId: string) => {
     try {
       await api.post(`/attendances/${attendanceId}/checkin`);
+      toast.success('Successfully checked in!');
       loadData();
     } catch (error: any) {
       console.error('Failed to check in:', error);
-      alert(error.response?.data?.message || 'Failed to check in');
+      toast.error(error.response?.data?.message || 'Failed to check in');
     }
   };
 
   const deleteAttendance = async (id: string) => {
-    if (!confirm('Are you sure you want to remove this attendance?')) return;
+    if (!window.confirm('Are you sure you want to remove this attendance?')) return;
     try {
       await api.delete(`/attendances/${id}`);
+      toast.success('Attendance removed successfully');
       loadData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete attendance:', error);
-      alert('Failed to delete attendance');
+      toast.error(error.response?.data?.message || 'Failed to delete attendance');
     }
   };
 

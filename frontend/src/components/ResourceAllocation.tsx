@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import { isPastEvent } from '../utils/eventUtils';
 import '../App.css';
 
 interface Event {
@@ -38,7 +39,7 @@ interface AvailabilityInfo {
 }
 
 function ResourceAllocation() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isOrg } = useAuth();
   const [allAllocations, setAllAllocations] = useState<Allocation[]>([]); // Store all allocations from API
   const [events, setEvents] = useState<Event[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
@@ -457,18 +458,36 @@ function ResourceAllocation() {
                               </td>
                               <td>
                                 <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                  <button
-                                    onClick={() => handleEdit(allocation)}
-                                    className="btn btn-sm btn-secondary"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => deleteAllocation(allocation.id)}
-                                    className="btn btn-sm btn-danger"
-                                  >
-                                    Remove
-                                  </button>
+                                  {/* Org admins cannot edit/delete allocations for past events */}
+                                  {(() => {
+                                    const isAllocationPast = allocation.event ? isPastEvent(allocation.event) : false;
+                                    const canEdit = isAdmin || (isOrg && !isAllocationPast);
+                                    
+                                    if (!canEdit) {
+                                      return (
+                                        <span style={{ fontSize: '0.875rem', color: 'var(--gray-500)', fontStyle: 'italic' }}>
+                                          Past event
+                                        </span>
+                                      );
+                                    }
+                                    
+                                    return (
+                                      <>
+                                        <button
+                                          onClick={() => handleEdit(allocation)}
+                                          className="btn btn-sm btn-secondary"
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          onClick={() => deleteAllocation(allocation.id)}
+                                          className="btn btn-sm btn-danger"
+                                        >
+                                          Remove
+                                        </button>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
                               </td>
                             </tr>

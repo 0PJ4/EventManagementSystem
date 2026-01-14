@@ -71,8 +71,9 @@ function ReportsDashboard() {
     try {
       const response = await api.get('/reports/double-booked-users');
       setDoubleBookedUsers(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load double-booked users:', error);
+      toast.error(error.response?.data?.message || 'Failed to load double-booked users');
     } finally {
       setLoading(false);
     }
@@ -83,8 +84,9 @@ function ReportsDashboard() {
     try {
       const response = await api.get('/reports/violated-constraints');
       setViolatedConstraints(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load violated constraints:', error);
+      toast.error(error.response?.data?.message || 'Failed to load violated constraints');
     } finally {
       setLoading(false);
     }
@@ -114,8 +116,9 @@ function ReportsDashboard() {
     try {
       const response = await api.get('/reports/parent-child-violations');
       setParentChildViolations(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load parent-child violations:', error);
+      toast.error(error.response?.data?.message || 'Failed to load parent-child violations');
     } finally {
       setLoading(false);
     }
@@ -128,8 +131,9 @@ function ReportsDashboard() {
         params: { threshold },
       });
       setExternalAttendees(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load external attendees:', error);
+      toast.error(error.response?.data?.message || 'Failed to load external attendees');
     } finally {
       setLoading(false);
     }
@@ -145,9 +149,9 @@ function ReportsDashboard() {
       }
       const response = await api.get('/reports/show-up-rate', { params });
       setShowUpRate(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load show-up rate:', error);
-      alert('Failed to load show-up rate');
+      toast.error(error.response?.data?.message || 'Failed to load show-up rate');
     } finally {
       setLoading(false);
     }

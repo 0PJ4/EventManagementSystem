@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import ResourceAvailabilityViewer from './ResourceAvailabilityViewer';
 import toast from 'react-hot-toast';
+import { isPastEvent } from '../utils/eventUtils';
 import '../App.css';
 
 interface Resource {
@@ -68,6 +69,14 @@ function EventForm() {
     try {
       const response = await api.get(`/events/${id}`);
       const eventData = response.data;
+      
+      // Org admins cannot edit past events
+      if (isOrg && !isAdmin && isPastEvent(eventData)) {
+        toast.error('Cannot edit past events');
+        navigate('/events');
+        return;
+      }
+      
       setEvent({
         title: eventData.title || '',
         description: eventData.description || '',
@@ -85,9 +94,9 @@ function EventForm() {
         const allocationsRes = await api.get(`/allocations?eventId=${id}`);
         setResourceAllocations(allocationsRes.data || []);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load event:', error);
-      alert('Failed to load event');
+      toast.error(error.response?.data?.message || 'Failed to load event');
     }
   };
 
@@ -268,6 +277,7 @@ function EventForm() {
                 }
                 // If availability check fails for other reasons, still try to update
                 console.warn('Availability check failed, proceeding with update:', err);
+                toast.error(err.response?.data?.message || 'Availability check failed');
               }
             }
             
@@ -285,8 +295,9 @@ function EventForm() {
         if (createdEventId && !id) {
           try {
             await api.delete(`/events/${createdEventId}`);
-          } catch (deleteError) {
+          } catch (deleteError: any) {
             console.error('Failed to delete event after allocation update error:', deleteError);
+            toast.error('Failed to clean up event after error');
           }
         }
         throw updateError;
@@ -308,8 +319,9 @@ function EventForm() {
         if (createdEventId && !id) {
           try {
             await api.delete(`/events/${createdEventId}`);
-          } catch (deleteError) {
+          } catch (deleteError: any) {
             console.error('Failed to delete event after allocation error:', deleteError);
+            toast.error('Failed to clean up event after error');
           }
         }
         // Re-throw the allocation error

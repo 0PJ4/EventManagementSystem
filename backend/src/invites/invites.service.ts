@@ -5,12 +5,12 @@ import {
   ConflictException,
   ForbiddenException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Brackets } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, Brackets, DataSource, In } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { MailerService } from '@nestjs-modules/mailer';
 import { Invite, InviteStatus } from '../entities/invite.entity';
-import { Event } from '../entities/event.entity';
+import { Event, EventStatus } from '../entities/event.entity';
 import { User, UserRole } from '../entities/user.entity';
 import { Organization } from '../entities/organization.entity';
 import { Attendance } from '../entities/attendance.entity';
@@ -33,6 +33,8 @@ export class InvitesService {
     private attendanceRepository: Repository<Attendance>,
     private attendancesService: AttendancesService,
     private mailerService: MailerService,
+    @InjectDataSource()
+    private dataSource: DataSource,
   ) {}
 
   async create(createInviteDto: CreateInviteDto, currentUser?: { role: UserRole; id: string; organizationId?: string | null }): Promise<Invite> {
@@ -43,6 +45,20 @@ export class InvitesService {
 
     if (!event) {
       throw new NotFoundException(`Event with ID ${createInviteDto.eventId} not found`);
+    }
+
+    // Validate event is published (can't invite to draft or cancelled events)
+    if (event.status === EventStatus.DRAFT) {
+      throw new BadRequestException('Cannot send invites for draft events. Please publish the event first.');
+    }
+
+    if (event.status === EventStatus.CANCELLED) {
+      throw new BadRequestException('Cannot send invites for cancelled events');
+    }
+
+    // Validate event hasn't ended
+    if (new Date(event.endTime) < new Date()) {
+      throw new BadRequestException('Cannot send invites for past events');
     }
 
     // For Super Admins: use the event's organization as the inviting organization
@@ -88,6 +104,16 @@ export class InvitesService {
       );
     }
 
+    // Validate external invite requirements
+    if (createInviteDto.userEmail && !createInviteDto.userId) {
+      // External invite - must check if event allows external attendees
+      if (!event.allowExternalAttendees) {
+        throw new BadRequestException(
+          'Cannot send external invites for events that do not allow external attendees'
+        );
+      }
+    }
+
     // If inviting a user (not external email), validate user exists and can be invited
     if (createInviteDto.userId) {
       const user = await this.userRepository.findOne({
@@ -113,38 +139,38 @@ export class InvitesService {
       // Independent users (user.organizationId === null) can be invited to any event
     }
 
-    // Check if user is already registered for the event
+    // Check if user is already registered for the event (efficient query)
     if (createInviteDto.userId) {
-      const existingAttendance = await this.attendancesService.findAll(
-        createInviteDto.eventId
-      );
-      const isAlreadyRegistered = existingAttendance.some(
-        (attendance) => attendance.userId === createInviteDto.userId
-      );
+      const existingAttendance = await this.attendanceRepository.findOne({
+        where: {
+          eventId: createInviteDto.eventId,
+          userId: createInviteDto.userId,
+        },
+      });
 
-      if (isAlreadyRegistered) {
+      if (existingAttendance) {
         throw new ConflictException('User is already registered for this event');
       }
     }
 
     // Check if an active (non-declined) invite already exists
-    // We allow multiple DECLINED invites for history, but only one active invite
+    // We allow multiple DECLINED invites for history, but only one active invite (PENDING/ACCEPTED/CANCELLED)
     const existingActiveInvite = await this.inviteRepository.findOne({
       where: createInviteDto.userId
         ? { 
             eventId: createInviteDto.eventId, 
             userId: createInviteDto.userId,
-            status: InviteStatus.PENDING // Check for pending invites
+            status: In([InviteStatus.PENDING, InviteStatus.ACCEPTED, InviteStatus.CANCELLED])
           }
         : { 
             eventId: createInviteDto.eventId, 
             userEmail: createInviteDto.userEmail,
-            status: InviteStatus.PENDING // Check for pending invites
+            status: In([InviteStatus.PENDING, InviteStatus.ACCEPTED, InviteStatus.CANCELLED])
           },
     });
 
     if (existingActiveInvite) {
-      throw new ConflictException('Invite already sent and is pending');
+      throw new ConflictException('An active invite already exists for this user/email and event');
     }
 
     // Check if user previously accepted but is no longer registered
@@ -163,7 +189,7 @@ export class InvitesService {
         existingAcceptedInvite.status = InviteStatus.PENDING;
         existingAcceptedInvite.respondedAt = null;
         // Regenerate token for external invites (if applicable)
-        if (!createInviteDto.userId && createInviteDto.userEmail) {
+        if (createInviteDto.userEmail && !createInviteDto.userId) {
           existingAcceptedInvite.token = randomUUID();
         }
         const updatedInvite = await this.inviteRepository.save(existingAcceptedInvite);
@@ -268,37 +294,68 @@ export class InvitesService {
   }
 
   async accept(id: string, userId: string): Promise<Invite> {
-    const invite = await this.findOne(id);
-
-    if (invite.status !== InviteStatus.PENDING) {
-      throw new BadRequestException(`Invite is already ${invite.status}`);
-    }
-
-    // STRICT: Only the invitee can accept
-    if (invite.userId !== userId) {
-      throw new ForbiddenException('You can only accept invites that are specifically for you');
-    }
-
-    invite.status = InviteStatus.ACCEPTED;
-    invite.respondedAt = new Date();
-
-    await this.inviteRepository.save(invite);
-
-    // Automatically register the user for the event
-    try {
-      await this.attendancesService.register({
-        eventId: invite.eventId,
-        userId: invite.userId,
+    // Use transaction to ensure atomicity
+    return await this.dataSource.transaction(async (manager) => {
+      const invite = await manager.findOne(Invite, {
+        where: { id },
+        relations: ['event'],
       });
-    } catch (error) {
-      // If registration fails, revert invite status
-      invite.status = InviteStatus.PENDING;
-      invite.respondedAt = null;
-      await this.inviteRepository.save(invite);
-      throw error;
-    }
 
-    return invite;
+      if (!invite) {
+        throw new NotFoundException(`Invite with ID ${id} not found`);
+      }
+
+      if (invite.status !== InviteStatus.PENDING) {
+        throw new BadRequestException(`Invite is already ${invite.status}`);
+      }
+
+      // Validate invite is for a user (not external)
+      if (!invite.userId) {
+        throw new BadRequestException('This invite requires a public token. Use the public accept endpoint.');
+      }
+
+      // STRICT: Only the invitee can accept
+      if (invite.userId !== userId) {
+        throw new ForbiddenException('You can only accept invites that are specifically for you');
+      }
+
+      // Validate event is still valid
+      if (invite.event.status === EventStatus.CANCELLED) {
+        throw new BadRequestException('Cannot accept invite for a cancelled event');
+      }
+
+      if (new Date(invite.event.endTime) < new Date()) {
+        throw new BadRequestException('Cannot accept invite for a past event');
+      }
+
+      invite.status = InviteStatus.ACCEPTED;
+      invite.respondedAt = new Date();
+      await manager.save(invite);
+
+      // Automatically register the user for the event
+      // Note: attendancesService.register uses its own transaction, which is fine
+      // It will handle rollback internally if needed
+      try {
+        await this.attendancesService.register({
+          eventId: invite.eventId,
+          userId: invite.userId,
+        });
+      } catch (error: any) {
+        // If registration fails, revert invite status
+        invite.status = InviteStatus.PENDING;
+        invite.respondedAt = null;
+        await manager.save(invite);
+        // Re-throw the error - NestJS exceptions will be properly handled
+        // If it's already an HttpException, re-throw it
+        if (error && (error.constructor?.name?.includes('Exception') || error.statusCode)) {
+          throw error;
+        }
+        // Otherwise, wrap it in a BadRequestException
+        throw new BadRequestException(error?.message || 'Failed to register attendance');
+      }
+
+      return invite;
+    });
   }
 
   async decline(id: string, userId: string): Promise<Invite> {
@@ -306,6 +363,11 @@ export class InvitesService {
 
     if (invite.status !== InviteStatus.PENDING) {
       throw new BadRequestException(`Invite is already ${invite.status}`);
+    }
+
+    // Validate invite is for a user (not external)
+    if (!invite.userId) {
+      throw new BadRequestException('This invite requires a public token. Use the public decline endpoint.');
     }
 
     // STRICT: Only the invitee can decline
@@ -401,47 +463,70 @@ export class InvitesService {
   }
 
   async acceptPublic(token: string): Promise<{ invite: Invite; attendanceId: string }> {
-    const invite = await this.inviteRepository.findOne({
-      where: { token },
-      relations: ['event'],
-    });
-
-    if (!invite) {
-      throw new NotFoundException('Invite not found');
-    }
-
-    if (invite.status !== InviteStatus.PENDING) {
-      throw new BadRequestException(`Invite is already ${invite.status}`);
-    }
-
-    if (!invite.userEmail) {
-      throw new BadRequestException('This invite requires a user account');
-    }
-
-    invite.status = InviteStatus.ACCEPTED;
-    invite.respondedAt = new Date();
-
-    await this.inviteRepository.save(invite);
-
-    // Automatically register the external attendee for the event
-    let attendanceId: string;
-    try {
-      const attendance = await this.attendancesService.register({
-        eventId: invite.eventId,
-        userId: null,
-        userEmail: invite.userEmail,
-        userName: invite.userName,
+    // Use transaction to ensure atomicity
+    return await this.dataSource.transaction(async (manager) => {
+      const invite = await manager.findOne(Invite, {
+        where: { token },
+        relations: ['event'],
       });
-      attendanceId = attendance.id;
-    } catch (error) {
-      // If registration fails, revert invite status
-      invite.status = InviteStatus.PENDING;
-      invite.respondedAt = null;
-      await this.inviteRepository.save(invite);
-      throw error;
-    }
 
-    return { invite, attendanceId };
+      if (!invite) {
+        throw new NotFoundException('Invite not found');
+      }
+
+      if (invite.status !== InviteStatus.PENDING) {
+        throw new BadRequestException(`Invite is already ${invite.status}`);
+      }
+
+      if (!invite.userEmail) {
+        throw new BadRequestException('This invite requires a user account');
+      }
+
+      // Validate event allows external attendees
+      if (!invite.event.allowExternalAttendees) {
+        throw new BadRequestException('This event does not allow external attendees');
+      }
+
+      // Validate event is still valid
+      if (invite.event.status === EventStatus.CANCELLED) {
+        throw new BadRequestException('Cannot accept invite for a cancelled event');
+      }
+
+      if (new Date(invite.event.endTime) < new Date()) {
+        throw new BadRequestException('Cannot accept invite for a past event');
+      }
+
+      invite.status = InviteStatus.ACCEPTED;
+      invite.respondedAt = new Date();
+      await manager.save(invite);
+
+      // Automatically register the external attendee for the event
+      // Don't pass userId at all for external users - omit it completely
+      // Note: attendancesService.register uses its own transaction, which is fine
+      let attendanceId: string;
+      try {
+        const attendance = await this.attendancesService.register({
+          eventId: invite.eventId,
+          userEmail: invite.userEmail,
+          userName: invite.userName,
+        });
+        attendanceId = attendance.id;
+      } catch (error: any) {
+        // If registration fails, revert invite status
+        invite.status = InviteStatus.PENDING;
+        invite.respondedAt = null;
+        await manager.save(invite);
+        // Re-throw the error - NestJS exceptions will be properly handled
+        // If it's already an HttpException, re-throw it
+        if (error && (error.constructor?.name?.includes('Exception') || error.statusCode)) {
+          throw error;
+        }
+        // Otherwise, wrap it in a BadRequestException
+        throw new BadRequestException(error?.message || 'Failed to register attendance');
+      }
+
+      return { invite, attendanceId };
+    });
   }
 
   async declinePublic(token: string): Promise<Invite> {

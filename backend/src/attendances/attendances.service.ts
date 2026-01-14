@@ -27,9 +27,9 @@ export class AttendancesService {
   async register(createAttendanceDto: CreateAttendanceDto): Promise<Attendance> {
     // Use transaction with pessimistic locking to prevent race conditions
     return await this.dataSource.transaction(async (manager) => {
+      // Lock the event row first (without join to avoid FOR UPDATE on nullable side)
       const event = await manager
         .createQueryBuilder(Event, 'event')
-        .leftJoinAndSelect('event.attendances', 'attendances')
         .setLock('pessimistic_write')
         .where('event.id = :eventId', { eventId: createAttendanceDto.eventId })
         .getOne();
@@ -38,8 +38,14 @@ export class AttendancesService {
         throw new NotFoundException(`Event with ID ${createAttendanceDto.eventId} not found`);
       }
 
-      // Check capacity (while holding lock)
-      const currentAttendanceCount = event.attendances?.length || 0;
+      // Check capacity (while holding lock) - count separately to avoid LEFT JOIN with FOR UPDATE
+      const attendanceCountResult = await manager
+        .createQueryBuilder(Attendance, 'attendance')
+        .where('attendance.eventId = :eventId', { eventId: createAttendanceDto.eventId })
+        .select('COUNT(attendance.id)', 'count')
+        .getRawOne();
+      
+      const currentAttendanceCount = parseInt(attendanceCountResult?.count || '0', 10);
       if (event.capacity > 0 && currentAttendanceCount >= event.capacity) {
         throw new ConflictException('Event capacity exceeded');
       }

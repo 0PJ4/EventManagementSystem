@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import { isPastEvent } from '../utils/eventUtils';
 import { getCurrentEasternTime } from '../utils/timeUtils';
 import { formatTableDate } from '../utils/dateFormatter';
@@ -46,7 +47,7 @@ function MyAttendance() {
       setAttendances(myAttendances);
     } catch (error: any) {
       console.error('Failed to load attendance:', error);
-      alert(error.response?.data?.message || 'Failed to load attendance data');
+      toast.error(error.response?.data?.message || 'Failed to load attendance data');
     } finally {
       setLoading(false);
     }

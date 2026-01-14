@@ -11,6 +11,7 @@ interface Event {
   startTime: string;
   endTime: string;
   organizationId: string | null;
+  status: string;
 }
 
 interface User {
@@ -74,8 +75,15 @@ function InvitesManagement() {
       const eventsData = eventsRes.data || [];
       const usersData = usersRes.data || [];
       
+      // Filter out past events - only show future/upcoming events for inviting
+      const now = new Date();
+      const futureEvents = eventsData.filter((event: Event) => {
+        const endTime = new Date(event.endTime);
+        return endTime >= now && event.status === 'published';
+      });
+      
       setAllInvites(invitesData);
-      setEvents(eventsData);
+      setEvents(futureEvents);
       setAllUsers(usersData);
       
       // Initial filter: org admins can see their org users + independent users

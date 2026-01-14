@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useOrganization } from '../contexts/OrganizationContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 
 interface Organization {
   id: string;
@@ -23,8 +24,9 @@ function OrganizationSwitcher() {
       if (response.data.length > 0 && !selectedOrgId) {
         setSelectedOrgId(response.data[0].id);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load organizations:', error);
+      toast.error(error.response?.data?.message || 'Failed to load organizations');
     } finally {
       setLoading(false);
     }
