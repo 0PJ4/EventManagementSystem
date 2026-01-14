@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import '../App.css';
 
 interface Organization {
@@ -35,9 +36,9 @@ function OrganizationsList() {
       }
       
       setAllOrganizations(orgs);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load organizations:', error);
-      alert('Failed to load organizations.');
+      toast.error(error.response?.data?.message || 'Failed to load organizations');
     } finally {
       setLoading(false);
     }
@@ -65,10 +66,10 @@ function OrganizationsList() {
 
       if (editingOrg) {
         await api.patch(`/organizations/${editingOrg.id}`, orgData);
-        alert('Organization updated successfully!');
+        toast.success('Organization updated successfully!');
       } else {
         await api.post('/organizations', orgData);
-        alert('Organization created successfully!');
+        toast.success('Organization created successfully!');
       }
       setFormData({ name: '', emailTemplate: '' });
       setShowForm(false);
@@ -76,7 +77,7 @@ function OrganizationsList() {
       loadOrganizations();
     } catch (error: any) {
       console.error('Failed to save organization:', error);
-      alert(error.response?.data?.message || 'Failed to save organization');
+      toast.error(error.response?.data?.message || 'Failed to save organization');
     }
   };
 
@@ -99,9 +100,10 @@ function OrganizationsList() {
     try {
       await api.delete(`/organizations/${id}`);
       loadOrganizations();
-    } catch (error) {
+      toast.success('Organization deleted successfully');
+    } catch (error: any) {
       console.error('Failed to delete organization:', error);
-      alert('Failed to delete organization');
+      toast.error(error.response?.data?.message || 'Failed to delete organization');
     }
   };
 

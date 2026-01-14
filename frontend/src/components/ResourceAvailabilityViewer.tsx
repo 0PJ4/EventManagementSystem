@@ -82,7 +82,9 @@ function ResourceAvailabilityViewer({
       }
     } catch (err: any) {
       console.error('Failed to check availability:', err);
-      setError(err.response?.data?.message || 'Failed to check availability');
+      const errorMessage = err.response?.data?.message || 'Failed to check availability';
+      setError(errorMessage);
+      // Note: toast is not imported here, but error is shown in UI via setError
     } finally {
       setLoading(false);
     }

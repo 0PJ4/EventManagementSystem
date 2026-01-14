@@ -567,19 +567,23 @@ function EventsList() {
                             label: 'View Attendees',
                             to: `/events/${event.id}/attendees`,
                           });
-                          actions.push({
-                            label: 'Edit Event',
-                            to: `/events/${event.id}/edit`,
-                          });
-                          actions.push({
-                            label: 'Delete Event',
-                            onClick: () => {
-                              if (confirm('Are you sure you want to delete this event?')) {
-                                deleteEvent(event.id);
-                              }
-                            },
-                            danger: true,
-                          });
+                          // Org admins cannot edit/delete past events
+                          const isEventPast = isPastEvent(event);
+                          if (isAdmin || !isEventPast) {
+                            actions.push({
+                              label: 'Edit Event',
+                              to: `/events/${event.id}/edit`,
+                            });
+                            actions.push({
+                              label: 'Delete Event',
+                              onClick: () => {
+                                if (confirm('Are you sure you want to delete this event?')) {
+                                  deleteEvent(event.id);
+                                }
+                              },
+                              danger: true,
+                            });
+                          }
                         }
 
                         // Render dropdown with check-in badge if applicable

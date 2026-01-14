@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import { formatEventDateTime, formatTableDate } from '../utils/dateFormatter';
 import '../App.css';
 
@@ -34,7 +35,7 @@ function MyInvites() {
       setInvites(response.data || []);
     } catch (error: any) {
       console.error('Failed to load invites:', error);
-      alert(error.response?.data?.message || 'Failed to load invites');
+      toast.error(error.response?.data?.message || 'Failed to load invites');
     } finally {
       setLoading(false);
     }
@@ -43,23 +44,23 @@ function MyInvites() {
   const handleAccept = async (inviteId: string) => {
     try {
       await api.post(`/invites/${inviteId}/accept`);
-      alert('Invite accepted! You have been registered for the event.');
+      toast.success('Invite accepted! You have been registered for the event.');
       loadInvites();
     } catch (error: any) {
       console.error('Failed to accept invite:', error);
-      alert(error.response?.data?.message || 'Failed to accept invite');
+      toast.error(error.response?.data?.message || 'Failed to accept invite');
     }
   };
 
   const handleDecline = async (inviteId: string) => {
-    if (!confirm('Are you sure you want to decline this invite?')) return;
+    if (!window.confirm('Are you sure you want to decline this invite?')) return;
     try {
       await api.post(`/invites/${inviteId}/decline`);
-      alert('Invite declined.');
+      toast.success('Invite declined.');
       loadInvites();
     } catch (error: any) {
       console.error('Failed to decline invite:', error);
-      alert(error.response?.data?.message || 'Failed to decline invite');
+      toast.error(error.response?.data?.message || 'Failed to decline invite');
     }
   };
 

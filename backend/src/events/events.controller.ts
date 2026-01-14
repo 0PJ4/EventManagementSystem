@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, Request, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, Request, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
@@ -46,6 +46,11 @@ export class EventsController {
       if (event.organizationId !== req.user.organizationId) {
         throw new ForbiddenException('You can only update events from your organization');
       }
+      // Org admins cannot edit past events
+      const now = new Date();
+      if (new Date(event.endTime) < now) {
+        throw new BadRequestException('Cannot edit past events');
+      }
     }
     return this.eventsService.update(id, updateEventDto);
   }
@@ -58,6 +63,11 @@ export class EventsController {
       const event = await this.eventsService.findOne(id);
       if (event.organizationId !== req.user.organizationId) {
         throw new ForbiddenException('You can only delete events from your organization');
+      }
+      // Org admins cannot delete past events
+      const now = new Date();
+      if (new Date(event.endTime) < now) {
+        throw new BadRequestException('Cannot delete past events');
       }
     }
     return this.eventsService.remove(id);

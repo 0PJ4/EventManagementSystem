@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import '../App.css';
 
 interface Stats {
@@ -36,8 +37,9 @@ function Dashboard() {
         users: usersRes.data.length || 0,
         organizations: orgsRes.data.length || 0,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load stats:', error);
+      toast.error(error.response?.data?.message || 'Failed to load dashboard statistics');
     } finally {
       setLoading(false);
     }

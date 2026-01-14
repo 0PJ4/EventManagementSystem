@@ -53,7 +53,9 @@ function PublicInviteResponse() {
       }
     } catch (error: any) {
       console.error('Failed to load invite:', error);
-      setError(error.response?.data?.message || 'Invite not found or has expired');
+      const errorMessage = error.response?.data?.message || 'Invite not found or has expired';
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import '../App.css';
 
 interface Attendance {
@@ -75,7 +76,7 @@ function AttendeesList() {
       }
     } catch (error: any) {
       console.error('Failed to load attendees:', error);
-      alert(error.response?.data?.message || 'Failed to load attendees');
+      toast.error(error.response?.data?.message || 'Failed to load attendees');
     } finally {
       setLoading(false);
     }
@@ -84,11 +85,11 @@ function AttendeesList() {
   const checkIn = async (attendanceId: string) => {
     try {
       await api.post(`/attendances/${attendanceId}/checkin`);
-      alert('Checked in successfully!');
+      toast.success('Checked in successfully!');
       loadData();
     } catch (error: any) {
       console.error('Failed to check in:', error);
-      alert(error.response?.data?.message || 'Failed to check in');
+      toast.error(error.response?.data?.message || 'Failed to check in');
     }
   };
 

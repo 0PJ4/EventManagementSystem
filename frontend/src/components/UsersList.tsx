@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import '../App.css';
 
 interface User {
@@ -52,8 +53,9 @@ function UsersList() {
       ]);
       setAllUsers(usersRes.data || []);
       setOrganizations(orgsRes.data || []);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load data:', error);
+      toast.error(error.response?.data?.message || 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -93,7 +95,7 @@ function UsersList() {
     e.preventDefault();
     try {
       if (!editingUser && formData.password.length < 6) {
-        alert('Password must be at least 6 characters long');
+        toast.error('Password must be at least 6 characters long');
         return;
       }
 
@@ -106,7 +108,7 @@ function UsersList() {
       // Only include password if creating new user or if password is provided during edit
       if (!editingUser || formData.password) {
         if (formData.password.length < 6) {
-          alert('Password must be at least 6 characters long');
+          toast.error('Password must be at least 6 characters long');
           return;
         }
         userData.password = formData.password;
@@ -114,7 +116,7 @@ function UsersList() {
 
       // Org admin requires organization
       if (formData.role === 'org' && !formData.organizationId) {
-        alert('Organization admin must belong to an organization');
+        toast.error('Organization admin must belong to an organization');
         return;
       }
 
@@ -128,10 +130,10 @@ function UsersList() {
 
       if (editingUser) {
         await api.patch(`/users/${editingUser.id}`, userData);
-        alert('User updated successfully!');
+        toast.success('User updated successfully!');
       } else {
         await api.post('/users', userData);
-        alert('User created successfully!');
+        toast.success('User created successfully!');
       }
       
       const resetOrgId = isOrg ? (user?.organizationId || '') : '';
@@ -141,7 +143,7 @@ function UsersList() {
       loadData();
     } catch (error: any) {
       console.error('Failed to save user:', error);
-      alert(error.response?.data?.message || 'Failed to save user');
+      toast.error(error.response?.data?.message || 'Failed to save user');
     }
   };
 
@@ -169,9 +171,10 @@ function UsersList() {
     try {
       await api.delete(`/users/${id}`);
       loadData();
-    } catch (error) {
+      toast.success('User deleted successfully');
+    } catch (error: any) {
       console.error('Failed to delete user:', error);
-      alert('Failed to delete user');
+      toast.error(error.response?.data?.message || 'Failed to delete user');
     }
   };
 
